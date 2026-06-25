@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Local outputs / scratch
+*.extract.txt
+extracted_text/
+out/
+*.md.out
+
+# OS
+.DS_Store
+
+# Don't commit PDFs or model weights
+*.pdf
+*.safetensors
+*.bin
