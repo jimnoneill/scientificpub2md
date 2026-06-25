@@ -13,7 +13,8 @@ Two engines:
 
 Each engine runs through one of two backends:
   * ``transformers`` — in-process; GPU or CPU. Zero infra.
-  * ``vllm`` — an OpenAI-compatible vLLM server; pages can be sent concurrently for throughput.
+  * ``vllm`` — a local vLLM server (its ``/v1/chat/completions`` HTTP API); pages can be sent
+    concurrently for throughput. Runs entirely on your own machine — no external service.
 
 Decoding is greedy / temperature 0, so re-extracting a PDF is byte-reproducible.
 """
@@ -248,10 +249,14 @@ class LightOnOCRBackend:
 
 
 # --------------------------------------------------------------------------------------
-# vLLM backend (OpenAI-compatible server; GPU; supports concurrent pages) — both engines
+# vLLM backend (local vLLM HTTP server; GPU; supports concurrent pages) — both engines
 # --------------------------------------------------------------------------------------
 class VLLMBackend:
-    """Client for an OpenAI-compatible vLLM server hosting a VLM/OCR model.
+    """Client for a local vLLM server hosting a VLM/OCR model.
+
+    Talks to vLLM's ``/v1/chat/completions`` HTTP endpoint with plain ``requests`` — that URL
+    schema is a widely-adopted wire format (vLLM, Ollama, llama.cpp, TGI, ... all implement it).
+    Nothing here calls any external/hosted service; the server runs on your own machine/tailnet.
 
     Works for either engine: pass ``prompt`` (the per-page instruction) for the Qwen3-VL path, or
     leave it ``None`` for LightOnOCR's image-only path. Deterministic via temperature 0 + a fixed

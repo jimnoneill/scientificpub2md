@@ -34,7 +34,7 @@ dependencies = [
 # The qwen3vl engine's in-process (transformers) backend needs torchvision (the Qwen3-VL
 # processor pulls it in). Install torch + torchvision from the SAME index so their builds match.
 qwen = ["torchvision>=0.19"]
-# Fast batched GPU serving via an OpenAI-compatible vLLM server (advanced; see serve_vllm.sh).
+# Fast batched GPU serving via a local vLLM server (advanced; see serve_vllm.sh).
 vllm = ["vllm>=0.6"]
 all = ["torchvision>=0.19", "vllm>=0.6"]
 

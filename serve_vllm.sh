@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Optional: launch an OpenAI-compatible vLLM server hosting the VLM, for the fast batched
+# Optional: launch a local vLLM server hosting the VLM, for the fast batched
 # `--backend vllm` path. Only useful for large batches on a GPU; the default in-process
 # `transformers` backend needs none of this.
 #

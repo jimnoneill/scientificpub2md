@@ -54,7 +54,7 @@ def build_parser():
     ap.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default="auto",
                     help="compute device for the transformers backend (auto picks CUDA, then Apple MPS, then CPU)")
     ap.add_argument("--backend", choices=["transformers", "vllm"], default="transformers",
-                    help="transformers = in-process (CPU/GPU/MPS); vllm = OpenAI-compatible server (GPU). Default: transformers")
+                    help="transformers = in-process (CPU/GPU/MPS); vllm = local vLLM HTTP server (GPU). Default: transformers")
     ap.add_argument("--model", default=None, help="override the VLM model id (defaults per engine)")
     ap.add_argument("--dpi", type=int, default=None, help="page render DPI (default: 170 qwen3vl / 200 lightonocr)")
     ap.add_argument("--max-pages", type=int, default=None, help="limit pages per PDF (debugging)")
