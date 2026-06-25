@@ -46,8 +46,28 @@ def _collapse_blank_lines(text: str) -> str:
     return text.strip() + "\n"
 
 
+_ANY_HEADING = re.compile(r"(?m)^(\s{0,3})#{1,6}[ \t]+(.*\S)[ \t]*$")
+
+
 def to_headers(doc: str) -> str:
-    """Simple ``## ``-headers form: drop page markers, normalize whitespace, keep headings flat."""
+    """Simple ``## ``-headers form: drop page markers, normalize whitespace, keep headings flat.
+
+    The Qwen3-VL prompt already emits flat ``## `` headings; this just cleans them up. For engines
+    that emit mixed Markdown levels (``flatten=True``, e.g. LightOnOCR) every ``#``..``######``
+    heading is collapsed to ``## `` so the "simple headers" contract holds across engines.
+    """
+    text = _strip_page_markers(doc)
+    return _collapse_blank_lines(text)
+
+
+def flatten_headings(doc: str) -> str:
+    """Collapse every Markdown heading (``#``..``######``) to a flat ``## `` heading."""
+    text = _ANY_HEADING.sub(lambda m: f"{m.group(1)}## {m.group(2)}", _strip_page_markers(doc))
+    return _collapse_blank_lines(text)
+
+
+def passthrough_markdown(doc: str) -> str:
+    """Keep an engine's native Markdown as-is — just strip page markers and tidy blank lines."""
     return _collapse_blank_lines(_strip_page_markers(doc))
 
 
@@ -110,10 +130,17 @@ def to_markdown(doc: str, title: str | None = None) -> str:
     return _collapse_blank_lines("\n".join(out))
 
 
-def format_document(doc: str, fmt: str = "md", title: str | None = None) -> str:
-    """Render the raw extractor output as 'md' or 'headers'."""
+def format_document(doc: str, fmt: str = "md", *, native_markdown: bool = False,
+                    title: str | None = None) -> str:
+    """Render the raw extractor output as 'md' or 'headers'.
+
+    native_markdown=False (Qwen3-VL flat-``## `` convention): 'md' restructures into
+    ``# ``/``## ``/``### `` via the section vocabulary; 'headers' keeps the flat ``## ``.
+    native_markdown=True (LightOnOCR already emits structured Markdown): 'md' passes the model's
+    Markdown through untouched; 'headers' flattens all heading levels to ``## ``.
+    """
     if fmt == "md":
-        return to_markdown(doc, title=title)
+        return passthrough_markdown(doc) if native_markdown else to_markdown(doc, title=title)
     if fmt == "headers":
-        return to_headers(doc)
+        return flatten_headings(doc) if native_markdown else to_headers(doc)
     raise ValueError(f"unknown format {fmt!r} (expected 'md' or 'headers')")

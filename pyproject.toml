@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scientificpub2md"
-version = "0.1.0"
-description = "Lightweight VLM OCR that turns scientific manuscript PDFs into clean Markdown (.md) or simple '##' headers, on CPU or GPU."
+version = "0.2.0"
+description = "Lightweight VLM OCR that turns scientific manuscript PDFs into clean Markdown (.md) or simple '##' headers, on CPU, GPU, or Apple Silicon."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Jamey O'Neill", email = "jimnoneill@gmail.com" }]
-keywords = ["ocr", "pdf", "markdown", "vlm", "qwen", "scientific-papers", "document-parsing"]
+keywords = ["ocr", "pdf", "markdown", "vlm", "qwen", "lightonocr", "scientific-papers", "document-parsing"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -19,20 +19,24 @@ classifiers = [
     "Topic :: Text Processing :: Markup :: Markdown",
 ]
 
-# Base runtime: PDF rendering + the in-process VLM (transformers) on CPU or GPU.
+# Base runtime: PDF rendering + the in-process model (transformers) on CPU / GPU / Apple MPS.
+# Both engines use the native transformers processor path, so no qwen-vl-utils / torchvision.
 dependencies = [
     "PyMuPDF>=1.24",
     "Pillow>=10.0",
     "transformers>=4.57",
-    "qwen-vl-utils>=0.0.8",
     "torch>=2.4",
     "accelerate>=0.30",
     "requests>=2.28",
 ]
 
 [project.optional-dependencies]
+# The qwen3vl engine's in-process (transformers) backend needs torchvision (the Qwen3-VL
+# processor pulls it in). Install torch + torchvision from the SAME index so their builds match.
+qwen = ["torchvision>=0.19"]
 # Fast batched GPU serving via an OpenAI-compatible vLLM server (advanced; see serve_vllm.sh).
 vllm = ["vllm>=0.6"]
+all = ["torchvision>=0.19", "vllm>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/jimnoneill/scientificpub2md"

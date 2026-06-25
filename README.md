@@ -1,30 +1,108 @@
-# scientificpub2md
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="scientificpub2md" width="120">
+</p>
 
-**Lightweight VLM OCR that turns scientific manuscript PDFs into clean Markdown (`.md`) or simple `##` headers — on CPU or GPU.**
+<h1 align="center">scientificpub2md</h1>
 
-Most PDF parsers choke on multi-column scientific layouts, drop detailed methods, mangle reading order, or truncate long papers. `scientificpub2md` takes a different approach: it **renders each page to an image and transcribes it one page at a time with a vision-language model** (Qwen3-VL-8B by default). Nothing is truncated however long the paper, the reading order is whatever a human sees, and every section heading comes out as a clean `##` markdown header.
+<p align="center">
+  <strong>Lightweight VLM OCR that turns scientific manuscript PDFs into clean Markdown — on CPU, GPU, or Apple Silicon.</strong>
+</p>
 
-```
-PDF ──render pages (PyMuPDF)──▶ page images ──VLM transcribe──▶ clean text with ## headers ──▶ .md  or  ## headers
-```
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#two-output-formats">Formats</a> ·
+  <a href="#two-engines">Engines</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#when-something-goes-wrong">Troubleshooting</a>
+</p>
 
-- **Verbatim, not summarized.** The model transcribes the page; it does not paraphrase.
-- **No truncation.** Pages are processed individually and concatenated, so a 50-page paper is fully captured.
-- **Headings preserved.** Every section and sub-section is marked `## …` (multi-column reading order handled).
-- **Noise dropped.** Running heads, page numbers, journal banners, DOIs and (by default) the back matter — references, acknowledgements, funding — are omitted.
-- **Deterministic.** Greedy decoding (temperature 0) means re-extracting a PDF is byte-reproducible.
-- **CPU or GPU.** Runs in-process via 🤗 transformers on either; an optional vLLM server gives fast batched throughput on a GPU.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Engine-Qwen3--VL%20%7C%20LightOnOCR-4f46e5?style=flat-square" alt="Engines">
+  <img src="https://img.shields.io/badge/Runs%20on-CPU%20%7C%20GPU%20%7C%20Apple%20MPS-06b6d4?style=flat-square" alt="Runs on CPU, GPU, MPS">
+  <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License: MIT">
+  <a href="https://paypal.me/jimnoneill"><img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=flat-square&logo=paypal" alt="Donate via PayPal"></a>
+</p>
 
 ---
 
+## Why
+
+Most PDF parsers choke on real scientific papers: they mangle multi-column
+reading order, silently drop the detailed methods, or truncate long
+manuscripts. `scientificpub2md` takes a different route — it **renders each
+page to an image and transcribes it one page at a time with a vision-language
+model**, then stitches the pages back together. Nothing is truncated however
+long the paper, the reading order is the one a human sees, and every section
+heading comes out as a clean Markdown header.
+
+```
+  PDF ──render pages (PyMuPDF)──▶ page images ──VLM transcribe──▶ clean text ──▶ .md  or  ## headers
+```
+
+- **Verbatim, not summarized** — the model transcribes the page, it doesn't paraphrase.
+- **No truncation** — pages are processed individually, so a 50-page paper is fully captured.
+- **Headings preserved** — every section and sub-section becomes a Markdown header.
+- **Deterministic** — greedy decoding means re-extracting a PDF is byte-reproducible.
+- **Runs anywhere** — in-process on CPU, NVIDIA GPU, or Apple Silicon (MPS); or via a fast batched vLLM server.
+
+## Quick start
+
+```bash
+pip install git+https://github.com/jimnoneill/scientificpub2md
+```
+
+```bash
+# Single PDF → Markdown (default engine: LightOnOCR-2-1B; auto-selects GPU → Apple MPS → CPU)
+scientificpub2md paper.pdf
+
+# A whole directory of PDFs into an output folder
+scientificpub2md ./pdfs/ -o ./markdown/
+
+# Simple flat "## " headers instead of structured markdown
+scientificpub2md paper.pdf --format headers
+
+# Use the Qwen3-VL-8B scientific engine (drops references, preserves methods)
+pip install "scientificpub2md[qwen] @ git+https://github.com/jimnoneill/scientificpub2md"
+scientificpub2md paper.pdf --engine qwen3vl
+```
+
+Output lands next to each PDF (`paper.pdf → paper.md`); use `-o` for an explicit file or directory.
+
+From Python:
+
+```python
+from scientificpub2md import pdf_to_markdown
+
+md = pdf_to_markdown("paper.pdf")                          # default (lightonocr), auto device
+md = pdf_to_markdown("paper.pdf", engine="qwen3vl")        # Qwen3-VL-8B + scientific prompt
+```
+
 ## Two output formats
 
-| Format | Flag | Extension | What you get |
+| Format | Flag | Ext | What you get |
 |---|---|---|---|
-| **Markdown** (default) | `--format md` | `.md` | Structured document: the **title → `#`**, canonical sections (Abstract, Introduction, Methods, Results, Discussion, …) → `##`, and sub-headings → `###`. |
-| **Simple headers** | `--format headers` | `.txt` | The clean full text with every heading kept flat at `##`. Minimal, exactly as the model marked it. |
+| **Markdown** (default) | `--format md` | `.md` | Structured: title → `#`, canonical sections (Abstract, Methods, Results, …) → `##`, sub-headings → `###`. |
+| **Simple headers** | `--format headers` | `.txt` | The clean full text with every heading flat at `##`. Minimal. |
 
-The top-level vs sub-heading split in `md` mode is **purely deterministic** (a section-name vocabulary, no second LLM call), so output stays reproducible and the install stays light.
+The heading levelling is **deterministic** (a section-name vocabulary, no extra LLM call), so output is reproducible.
+
+## Two engines
+
+Pick with `--engine` (or `engine=` in Python). They're complementary — a tiny specialized OCR model, and a steerable general VLM tuned for papers.
+
+| | `--engine lightonocr` *(default)* | `--engine qwen3vl` |
+|---|---|---|
+| Model | LightOnOCR-2-1B (1B, purpose-built OCR) | Qwen3-VL-8B (8B, general VLM + scientific prompt) |
+| Install | base (`pip install scientificpub2md`) | needs `[qwen]` extra (torchvision) for transformers |
+| Memory | ~2–3 GB — **great on a laptop** | ~16 GB (bf16) |
+| Speed | much faster (~5 pages/s on an H100) | slower |
+| Editorial smarts | faithful full-page transcription (keeps everything) | **drops references / acknowledgements / page furniture**, preserves methods |
+| Tables & equations | **native Markdown tables + LaTeX** | as plain text |
+| Languages | 11 languages | English-tuned prompt |
+| Best for | fast/cheap transcription, tables/math, Macs & small GPUs | scientific-corpus building, back-matter dropping, reproducibility |
+
+> **macOS / Apple Silicon:** both engines run on MPS, but the 8B Qwen model is heavy for most Macs — the default `lightonocr` is small and fast on a MacBook.
 
 <details>
 <summary>Example output (<code>--format md</code>)</summary>
@@ -42,154 +120,88 @@ To investigate the evolution of HG biosynthesis within cyanobacteria, we searche
 ```
 </details>
 
----
-
-## Install
+## Install options
 
 Requires **Python 3.10+**.
 
-### CPU
-
 ```bash
-pip install -r requirements.txt          # pulls the CPU build of torch
-# or, as a package:
-pip install .
+# Simplest — base install (default lightonocr engine), CPU/MPS wheels:
+pip install git+https://github.com/jimnoneill/scientificpub2md
+
+# NVIDIA GPU — install a CUDA build of torch first, then the package:
+pip install torch --index-url https://download.pytorch.org/whl/cu124   # match your CUDA
+pip install git+https://github.com/jimnoneill/scientificpub2md
+
+# Add the Qwen3-VL engine's transformers backend (pulls torchvision — match your torch build):
+pip install "scientificpub2md[qwen] @ git+https://github.com/jimnoneill/scientificpub2md"
+
+# Fast batched serving (advanced):
+pip install "scientificpub2md[vllm] @ git+https://github.com/jimnoneill/scientificpub2md"
 ```
 
-CPU works out of the box and needs no GPU drivers — but the 8B model is **slow on CPU** (minutes per page). It's fine for a handful of pages or for swapping in a smaller VLM (see *Choosing a model*); for whole papers or batches, use a GPU.
-
-### GPU (recommended)
-
-Install a **CUDA build of PyTorch** first (match your CUDA version — see [pytorch.org](https://pytorch.org/get-started/locally/)), then the rest:
-
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # example: CUDA 12.4
-pip install -r requirements.txt
-```
-
-A ~16 GB (bf16) GPU comfortably holds Qwen3-VL-8B. The model downloads from Hugging Face on first run and is cached.
-
-### Requirements
+> The `qwen3vl` engine's in-process backend needs `torchvision` — install `torch` and
+> `torchvision` from the **same** index (e.g. both from the CUDA index) or they won't load.
+> `lightonocr` and the vLLM backend need no torchvision.
 
 | Package | Why |
 |---|---|
 | `PyMuPDF` | render PDF pages → images |
 | `Pillow` | image handling |
-| `transformers` (≥4.57) | runs the VLM (`Qwen3VLForConditionalGeneration`) |
-| `qwen-vl-utils` | Qwen-VL vision preprocessing |
-| `torch` (≥2.4) | model runtime — **install the CUDA build for GPU** |
-| `accelerate` | `device_map="auto"` placement |
+| `transformers` (≥4.57) | runs the models (LightOnOCR needs a recent build; older falls back to remote code) |
+| `torch` (≥2.4) | model runtime — **install the CUDA build for NVIDIA GPUs** |
+| `accelerate` | device placement |
 | `requests` | client for the optional vLLM backend |
-| `vllm` *(optional)* | fast batched GPU serving — `pip install ".[vllm]"` |
+| `torchvision` *(extra `[qwen]`)* | required by the Qwen3-VL processor |
+| `vllm` *(extra `[vllm]`)* | fast batched GPU serving |
 
----
+### Fast batched throughput (optional)
 
-## Usage
-
-### Command line
-
-```bash
-# Single PDF → Markdown (auto-selects GPU if available, else CPU)
-scientificpub2md paper.pdf
-
-# Simple ## headers instead of structured markdown
-scientificpub2md paper.pdf --format headers
-
-# Force CPU / GPU
-scientificpub2md paper.pdf --device cpu
-scientificpub2md paper.pdf --device cuda
-
-# A whole directory of PDFs into an output folder
-scientificpub2md ./pdfs/ -o ./markdown/
-
-# Keep references/acknowledgements/funding (dropped by default)
-scientificpub2md paper.pdf --keep-backmatter
-
-# Quick check — just the first 2 pages
-scientificpub2md paper.pdf --max-pages 2
-```
-
-Output defaults to alongside each PDF (`paper.pdf → paper.md`). Use `-o` for an explicit file (single PDF) or a directory (multiple).
-
-### Python
-
-```python
-from scientificpub2md import pdf_to_markdown
-
-md = pdf_to_markdown("paper.pdf")                 # auto CPU/GPU, markdown
-headers = pdf_to_markdown("paper.pdf", fmt="headers", device="cpu")
-```
-
-Reuse one loaded model across many PDFs:
-
-```python
-from scientificpub2md import make_backend, convert_pdf
-
-backend = make_backend("transformers", device="cuda")   # load once
-for pdf in pdfs:
-    open(pdf.replace(".pdf", ".md"), "w").write(convert_pdf(pdf, backend, fmt="md"))
-```
-
----
-
-## CPU vs GPU
-
-| | `--device cpu` | `--device cuda` | `--backend vllm` |
-|---|---|---|---|
-| Setup | none | CUDA torch | CUDA torch + `vllm`, run a server |
-| Speed | slow (minutes/page) | seconds/page | fastest, **batches pages concurrently** |
-| Memory | system RAM | ~16 GB VRAM (8B, bf16) | ~16 GB VRAM + KV cache |
-| Use for | a few pages, smaller models | single papers | large batches |
-
-`--device auto` (the default) picks CUDA when a GPU is visible to torch, otherwise CPU.
-
-### Fast batched throughput (optional vLLM backend)
-
-For many papers, serve the model once and let vLLM batch the in-flight page requests:
+For many papers, serve a model once and let vLLM batch the in-flight page requests:
 
 ```bash
-pip install ".[vllm]"
-./serve_vllm.sh                          # serves Qwen3-VL-8B on :8000 (GPU 0)
+./serve_vllm.sh                                              # Qwen3-VL-8B on :8000
+SCIPUB2MD_VLM_ID=lightonai/LightOnOCR-2-1B ./serve_vllm.sh   # or LightOnOCR
 
-# point the client at it; pages are sent concurrently
-scientificpub2md ./pdfs/ -o ./md/ --backend vllm --workers 16
+scientificpub2md ./pdfs/ -o ./md/ --backend vllm --workers 16            # qwen3vl
+scientificpub2md ./pdfs/ -o ./md/ --backend vllm --engine lightonocr     # lightonocr
 ```
 
 The server can be remote — set `SCIPUB2MD_VLLM_URL=http://host:8000` (or pass `--vllm-url`).
 
----
-
-## Choosing a model
-
-The default is `Qwen/Qwen3-VL-8B-Instruct`. Override it with `--model <hf-id>` or the `SCIPUB2MD_VLM_ID` environment variable to use any compatible Qwen3-VL checkpoint (e.g. a smaller variant for CPU, or a larger one for maximum fidelity).
-
-Other environment knobs:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `SCIPUB2MD_VLM_ID` | `Qwen/Qwen3-VL-8B-Instruct` | model id |
-| `SCIPUB2MD_VLLM_URL` | `http://localhost:8000` | vLLM server URL |
-| `SCIPUB2MD_MAX_PIXELS` | `2048·28·28` | per-page resolution budget (transformers backend) |
-
----
-
 ## How it works
 
-1. **Render** — each PDF page → a PNG at `--dpi` (default 170) with PyMuPDF.
-2. **Transcribe** — each page image → text with the VLM, guided by one carefully tuned prompt that marks headings as `##`, follows multi-column reading order, drops page furniture and back matter, and emits `SKIP` for all-references pages. Greedy decode → deterministic.
-3. **Assemble** — pages concatenated in order (nothing truncated).
-4. **Format** — page markers stripped; either kept as flat `##` headers, or restructured into `# / ## / ###` markdown via a deterministic section-name vocabulary.
+1. **Render** — each PDF page → a PNG with PyMuPDF (170 DPI qwen3vl / 200 DPI lightonocr).
+2. **Transcribe** — each page image → text with the chosen model, greedy-decoded (deterministic).
+3. **Assemble** — pages concatenated in order; nothing truncated.
+4. **Format** — restructured into `# / ## / ###` Markdown, or flattened to simple `##` headers.
 
----
+## When something goes wrong
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `device='cuda' requested but no CUDA GPU` | No GPU visible to torch — use `--device cpu`/`mps`, or install a CUDA torch build |
+| Out-of-memory loading qwen3vl | The 8B model needs ~16 GB — use `--engine lightonocr` or a smaller `--device` |
+| `qwen3vl … needs torchvision` | `pip install 'scientificpub2md[qwen]'` (match torch/torchvision builds), or use `--engine lightonocr` |
+| `operator torchvision::nms does not exist` | torch/torchvision mismatch — reinstall both from the same index |
+| Small text / subscripts garbled | Raise `--dpi` (e.g. `--dpi 220`) |
+| Connection refused on `--backend vllm` | No server — run `./serve_vllm.sh`, or set `--vllm-url` |
+| Very slow on CPU | Expected for the 8B model — use `--engine lightonocr` or a GPU |
 
 ## Notes & limitations
 
-- **OCR is the model's job** — transcription quality tracks the VLM. Dense subscripts/superscripts, unusual glyphs, and complex tables can have errors. Raise `--dpi` if small text is missed.
-- **Tables and figures** are transcribed as plain text / captions, not reconstructed as markdown tables or images.
-- **Speed on CPU** is the main constraint for whole papers; prefer a GPU or the vLLM backend for batches.
-- Determinism assumes a fixed model + prompt + DPI; changing any of them changes the output.
+- **OCR quality tracks the model.** Dense sub/superscripts, exotic glyphs, and complex tables can have errors. Raise `--dpi` if small text is missed.
+- **`qwen3vl`** drops back matter and page furniture by default (`--keep-backmatter` to retain). **`lightonocr`** is a faithful transcriber and keeps everything (not prompt-steerable).
+- **Tables/figures** under qwen3vl come out as plain text; lightonocr reconstructs Markdown tables and LaTeX.
+- Determinism assumes a fixed model + prompt + DPI.
 
----
+## Support
+
+If this saved you from wrangling GROBID or hand-cleaning PDFs, contributions
+toward continued maintenance are welcome.
+
+<p>
+  <a href="https://paypal.me/jimnoneill"><img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal" alt="Donate via PayPal"></a>
+</p>
 
 ## License
 

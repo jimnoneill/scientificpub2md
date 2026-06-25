@@ -1,13 +1,21 @@
-"""Page-by-page VLM extraction of a scientific PDF into clean text with ``## `` headers.
+"""Page-by-page VLM extraction of a scientific PDF into clean text.
 
-Renders every PDF page to an image (PyMuPDF) and transcribes it ONE PAGE AT A TIME with a
-vision-language model (Qwen3-VL-8B by default) — so nothing is truncated, however long the
-paper. Decoding is greedy (deterministic), so re-extracting a PDF is byte-reproducible.
+Renders every PDF page to an image (PyMuPDF) and transcribes it ONE PAGE AT A TIME — so
+nothing is truncated, however long the paper — then concatenates the pages in order.
 
-Two backends:
-  * ``transformers`` (default) — loads the model in-process; runs on GPU **or** CPU. Zero infra.
-  * ``vllm`` — talks to an OpenAI-compatible vLLM server (GPU); pages can be sent concurrently
-    for much higher throughput on large batches. See ``serve_vllm.sh``.
+Two engines:
+  * ``qwen3vl`` (default) — a general VLM (Qwen3-VL-8B) steered by a scientific-manuscript
+    prompt: marks headings as ``## ``, drops page furniture + back matter, skips all-reference
+    pages. Output is flat-``## `` text the format layer restructures.
+  * ``lightonocr`` — LightOnOCR-2-1B, a purpose-built 1B OCR model. Faithful transcription with
+    *native* Markdown (headings, tables, LaTeX equations). Smaller/faster; not prompt-steerable,
+    so it transcribes everything (no back-matter dropping).
+
+Each engine runs through one of two backends:
+  * ``transformers`` — in-process; GPU or CPU. Zero infra.
+  * ``vllm`` — an OpenAI-compatible vLLM server; pages can be sent concurrently for throughput.
+
+Decoding is greedy / temperature 0, so re-extracting a PDF is byte-reproducible.
 """
 from __future__ import annotations
 
@@ -18,6 +26,7 @@ import time
 from .prompts import page_prompt
 
 DEFAULT_MODEL = os.environ.get("SCIPUB2MD_VLM_ID", "Qwen/Qwen3-VL-8B-Instruct")
+LIGHTONOCR_MODEL = os.environ.get("SCIPUB2MD_LIGHTONOCR_ID", "lightonai/LightOnOCR-2-1B")
 DEFAULT_DPI = 170
 # Qwen-VL dynamic-resolution budget: a generous max keeps dense scientific text legible.
 MIN_PIXELS = 256 * 28 * 28
@@ -44,58 +53,104 @@ def render_pages(pdf_path, dpi=DEFAULT_DPI, max_pages=None):
         doc.close()
 
 
+def _resize_longest(img, longest):
+    """Downscale so the longest side is <= ``longest`` px (aspect preserved); never upscales."""
+    if not longest or max(img.size) <= longest:
+        return img
+    from PIL import Image
+
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    out = img.copy()
+    out.thumbnail((longest, longest), resample)
+    return out
+
+
 def _is_skip(text: str) -> bool:
     return text.upper().strip(" .") == "SKIP"
 
 
+def _resolve_device(device, *, allow_mps=False):
+    """Resolve 'auto' to a concrete device and validate an explicit request against torch."""
+    import torch
+
+    if device == "auto":
+        if allow_mps and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("device='cuda' requested but no CUDA GPU is visible to torch.")
+    return device
+
+
 # --------------------------------------------------------------------------------------
-# transformers backend (in-process; CPU or GPU)
+# Qwen3-VL via transformers (in-process; CPU or GPU)
 # --------------------------------------------------------------------------------------
 class TransformersBackend:
     """In-process Qwen3-VL via 🤗 transformers. Loads once, then transcribes page images.
 
-    device: ``"auto"`` (CUDA if available, else CPU), ``"cuda"``, or ``"cpu"``.
-    On GPU the weights load in bfloat16 (~16 GB for the 8B); on CPU they load in float32
-    (correct but slow — minutes per page — best for a handful of pages or a smaller model).
+    device: ``"auto"`` (CUDA if available, else CPU), ``"cuda"``, or ``"cpu"``. On GPU the weights
+    load in bfloat16 (~16 GB for the 8B); on CPU in float32 (correct but slow — minutes per page).
     """
 
+    native_markdown = False
+    default_dpi = DEFAULT_DPI
+
     def __init__(self, model_id=DEFAULT_MODEL, device="auto", keep_backmatter=False):
+        import torch
+
         self.model_id = model_id
         self.keep_backmatter = keep_backmatter
         self._model = None
         self._processor = None
-        import torch
+        self.device = _resolve_device(device, allow_mps=True)
+        # bf16 on CUDA; fp16 on Apple MPS (bf16 is poorly supported there); fp32 on CPU.
+        self._dtype = (
+            torch.bfloat16 if self.device == "cuda"
+            else torch.float16 if self.device == "mps"
+            else torch.float32
+        )
 
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("device='cuda' requested but no CUDA GPU is visible to torch.")
-        self.device = device
-        self._dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    _TV_HELP = (
+        "The qwen3vl engine's transformers backend needs torchvision (the Qwen3-VL processor "
+        "requires it). Install with `pip install 'scientificpub2md[qwen]'` (install torch + "
+        "torchvision from the SAME index so their builds match), or use `--engine lightonocr` "
+        "(no torchvision), or `--backend vllm`."
+    )
 
     def _load(self):
         if self._model is not None:
             return
-        import torch  # noqa: F401
         from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
         t0 = time.time()
         print(f"  loading {self.model_id} on {self.device} ({self._dtype})…", flush=True)
-        device_map = "auto" if self.device == "cuda" else "cpu"
-        self._model = Qwen3VLForConditionalGeneration.from_pretrained(
-            self.model_id, torch_dtype=self._dtype, device_map=device_map
-        )
+        # Load the processor first — it pulls in torchvision, so a missing-torchvision install
+        # fails fast here (with a clear message) instead of after downloading 16 GB of weights.
+        try:
+            self._processor = AutoProcessor.from_pretrained(
+                self.model_id, min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS
+            )
+        except ImportError as e:
+            if "torchvision" in str(e).lower():
+                raise ImportError(self._TV_HELP) from e
+            raise
+        if self.device == "cuda":
+            self._model = Qwen3VLForConditionalGeneration.from_pretrained(
+                self.model_id, torch_dtype=self._dtype, device_map="auto"
+            )
+        else:  # cpu / mps: load then move (device_map='auto' doesn't target MPS well)
+            self._model = Qwen3VLForConditionalGeneration.from_pretrained(
+                self.model_id, torch_dtype=self._dtype
+            ).to(self.device)
         self._model.eval()
-        self._processor = AutoProcessor.from_pretrained(
-            self.model_id, min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS
-        )
         print(f"  loaded in {time.time() - t0:.0f}s", flush=True)
 
     def transcribe(self, pil_img, max_new_tokens=6144):
         import torch
-        from qwen_vl_utils import process_vision_info
 
         self._load()
+        # Native processor path: pass the in-memory PIL page inline and let the chat template do the
+        # vision preprocessing. Avoids qwen_vl_utils (and its torchvision dependency) entirely.
         messages = [
             {
                 "role": "user",
@@ -105,14 +160,12 @@ class TransformersBackend:
                 ],
             }
         ]
-        text = self._processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, _ = process_vision_info(messages)
-        inputs = self._processor(
-            text=[text], images=image_inputs, padding=True, return_tensors="pt"
+        inputs = self._processor.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
         ).to(self._model.device)
         with torch.no_grad():
             gen = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        trimmed = [g[len(i):] for i, g in zip(inputs.input_ids, gen)]
+        trimmed = gen[:, inputs["input_ids"].shape[1]:]
         out = self._processor.batch_decode(
             trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0].strip()
@@ -120,20 +173,102 @@ class TransformersBackend:
 
 
 # --------------------------------------------------------------------------------------
-# vLLM backend (OpenAI-compatible server; GPU; supports concurrent pages)
+# LightOnOCR-2-1B via transformers (in-process; CPU, CUDA, or MPS)
 # --------------------------------------------------------------------------------------
-class VLLMBackend:
-    """Client for an OpenAI-compatible vLLM server hosting the VLM.
+class LightOnOCRBackend:
+    """In-process LightOnOCR-2-1B via 🤗 transformers — a purpose-built 1B OCR model.
 
-    Deterministic via temperature 0 + a fixed seed. If a dense page is truncated at the token
-    ceiling (finish_reason == 'length') the page is retried once at double the budget and the
-    longer transcription is kept.
+    Faithful, prompt-free transcription (image-only chat turn) producing native Markdown with
+    tables and LaTeX equations. ~2-3 GB in bf16, so it runs comfortably on a small GPU, and on
+    CPU/MPS far faster than the 8B Qwen path. Pages are rendered at 200 DPI and downscaled to a
+    1540 px longest side (the model card's recommendation).
+
+    NOTE: the model classes were upstreamed to transformers after 4.57; on older versions this
+    falls back to ``AutoModelForImageTextToText`` (+ ``trust_remote_code``). ``keep_backmatter``
+    is accepted for interface parity but has no effect — LightOnOCR is not prompt-steerable and
+    transcribes the whole page (references included).
     """
 
-    def __init__(self, url=None, model="qwen3-vl-8b", keep_backmatter=False):
+    native_markdown = True
+    default_dpi = 200
+
+    def __init__(self, model_id=LIGHTONOCR_MODEL, device="auto", keep_backmatter=False,
+                 resize_longest=1540, trust_remote_code=True):
+        import torch
+
+        self.model_id = model_id
+        self.resize_longest = resize_longest
+        self.trust_remote_code = trust_remote_code
+        self._model = None
+        self._processor = None
+        self.device = _resolve_device(device, allow_mps=True)
+        # bf16 on CUDA; float32 on CPU/MPS (bf16 is poorly supported there).
+        self._dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+
+    def _load(self):
+        if self._model is not None:
+            return
+        try:  # upstreamed in transformers (post-4.57)
+            from transformers import LightOnOcrForConditionalGeneration as _Model
+            from transformers import LightOnOcrProcessor as _Proc
+
+            model_kwargs, proc_kwargs = {}, {}
+        except ImportError:  # older transformers: resolve via Auto* + remote code
+            from transformers import AutoModelForImageTextToText as _Model
+            from transformers import AutoProcessor as _Proc
+
+            model_kwargs = {"trust_remote_code": self.trust_remote_code}
+            proc_kwargs = {"trust_remote_code": self.trust_remote_code}
+
+        t0 = time.time()
+        print(f"  loading {self.model_id} on {self.device} ({self._dtype})…", flush=True)
+        self._model = _Model.from_pretrained(self.model_id, torch_dtype=self._dtype, **model_kwargs).to(self.device)
+        self._model.eval()
+        self._processor = _Proc.from_pretrained(self.model_id, **proc_kwargs)
+        print(f"  loaded in {time.time() - t0:.0f}s", flush=True)
+
+    def transcribe(self, pil_img, max_new_tokens=4096):
+        import torch
+
+        self._load()
+        img = _resize_longest(pil_img, self.resize_longest)
+        # Image-only turn (no text instruction) — the model card's documented usage.
+        conversation = [{"role": "user", "content": [{"type": "image", "image": img}]}]
+        inputs = self._processor.apply_chat_template(
+            conversation, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+        )
+        inputs = {
+            k: (v.to(device=self.device, dtype=self._dtype) if v.is_floating_point() else v.to(self.device))
+            for k, v in inputs.items()
+        }
+        with torch.no_grad():
+            out_ids = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        gen = out_ids[0, inputs["input_ids"].shape[1]:]
+        return self._processor.decode(gen, skip_special_tokens=True).strip()
+
+
+# --------------------------------------------------------------------------------------
+# vLLM backend (OpenAI-compatible server; GPU; supports concurrent pages) — both engines
+# --------------------------------------------------------------------------------------
+class VLLMBackend:
+    """Client for an OpenAI-compatible vLLM server hosting a VLM/OCR model.
+
+    Works for either engine: pass ``prompt`` (the per-page instruction) for the Qwen3-VL path, or
+    leave it ``None`` for LightOnOCR's image-only path. Deterministic via temperature 0 + a fixed
+    seed. If a dense page is truncated at the token ceiling (finish_reason == 'length') the page is
+    retried once at double the budget and the longer transcription is kept.
+    """
+
+    def __init__(self, url=None, model="qwen3-vl-8b", prompt=None, *, native_markdown=False,
+                 default_dpi=DEFAULT_DPI, resize_longest=None, temperature=0.0, use_skip=False):
         self.url = (url or os.environ.get("SCIPUB2MD_VLLM_URL", "http://localhost:8000")).rstrip("/")
         self.model = model
-        self.keep_backmatter = keep_backmatter
+        self.prompt = prompt
+        self.native_markdown = native_markdown
+        self.default_dpi = default_dpi
+        self.resize_longest = resize_longest
+        self.temperature = temperature
+        self.use_skip = use_skip  # honor the 'SKIP' sentinel (Qwen prompt) — LightOnOCR never emits it
         self.device = "cuda (vllm server)"
 
     def transcribe(self, pil_img, max_new_tokens=6144):
@@ -141,27 +276,22 @@ class VLLMBackend:
 
         import requests
 
+        img = _resize_longest(pil_img, self.resize_longest)
         buf = io.BytesIO()
-        pil_img.save(buf, format="PNG")
+        img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
-        prompt = page_prompt(self.keep_backmatter)
+        content = [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}]
+        if self.prompt:
+            content.append({"type": "text", "text": self.prompt})
 
         def _call(budget):
             payload = {
                 "model": self.model,
-                "temperature": 0.0,
+                "temperature": self.temperature,
                 "seed": 42,
                 "max_tokens": budget,
                 "min_tokens": 16,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
+                "messages": [{"role": "user", "content": content}],
             }
             r = requests.post(self.url + "/v1/chat/completions", json=payload, timeout=600)
             r.raise_for_status()
@@ -173,26 +303,49 @@ class VLLMBackend:
             out2, _ = _call(max_new_tokens * 2)
             if len(out2) > len(out):
                 out = out2
-        return "" if _is_skip(out) else out
+        if self.use_skip and _is_skip(out):
+            return ""
+        return out
 
 
-def make_backend(backend="transformers", *, device="auto", model=None, keep_backmatter=False,
-                 vllm_url=None, vllm_model="qwen3-vl-8b"):
-    """Construct the requested backend."""
-    if backend == "vllm":
-        return VLLMBackend(url=vllm_url, model=vllm_model, keep_backmatter=keep_backmatter)
+# --------------------------------------------------------------------------------------
+# factory
+# --------------------------------------------------------------------------------------
+def make_backend(backend="transformers", *, engine="lightonocr", device="auto", model=None,
+                 keep_backmatter=False, vllm_url=None, vllm_model=None):
+    """Construct a backend for the requested ``engine`` ('lightonocr' or 'qwen3vl') and ``backend``
+    runtime ('transformers' or 'vllm')."""
+    if engine not in ("qwen3vl", "lightonocr"):
+        raise ValueError(f"unknown engine {engine!r} (expected 'qwen3vl' or 'lightonocr')")
+
     if backend == "transformers":
-        return TransformersBackend(
-            model_id=model or DEFAULT_MODEL, device=device, keep_backmatter=keep_backmatter
-        )
+        if engine == "lightonocr":
+            return LightOnOCRBackend(model_id=model or LIGHTONOCR_MODEL, device=device,
+                                     keep_backmatter=keep_backmatter)
+        return TransformersBackend(model_id=model or DEFAULT_MODEL, device=device,
+                                   keep_backmatter=keep_backmatter)
+
+    if backend == "vllm":
+        if engine == "lightonocr":
+            return VLLMBackend(url=vllm_url, model=vllm_model or LIGHTONOCR_MODEL, prompt=None,
+                               native_markdown=True, default_dpi=200, resize_longest=1540)
+        return VLLMBackend(url=vllm_url, model=vllm_model or "qwen3-vl-8b",
+                           prompt=page_prompt(keep_backmatter), native_markdown=False,
+                           default_dpi=DEFAULT_DPI, resize_longest=None, use_skip=True)
+
     raise ValueError(f"unknown backend {backend!r} (expected 'transformers' or 'vllm')")
 
 
 # --------------------------------------------------------------------------------------
 # whole-PDF drivers
 # --------------------------------------------------------------------------------------
-def extract_pdf(pdf_path, backend, dpi=DEFAULT_DPI, max_pages=None, verbose=True):
+def _dpi_for(backend, dpi):
+    return dpi if dpi is not None else getattr(backend, "default_dpi", DEFAULT_DPI)
+
+
+def extract_pdf(pdf_path, backend, dpi=None, max_pages=None, verbose=True):
     """Render + transcribe every page sequentially; concatenate with page markers. No truncation."""
+    dpi = _dpi_for(backend, dpi)
     parts = []
     t0 = time.time()
     for pno, total, img in render_pages(pdf_path, dpi=dpi, max_pages=max_pages):
@@ -203,17 +356,18 @@ def extract_pdf(pdf_path, backend, dpi=DEFAULT_DPI, max_pages=None, verbose=True
     return "".join(parts).strip()
 
 
-def extract_pdf_concurrent(pdf_path, backend, dpi=DEFAULT_DPI, max_pages=None, workers=8, verbose=True):
+def extract_pdf_concurrent(pdf_path, backend, dpi=None, max_pages=None, workers=8, verbose=True):
     """Transcribe pages concurrently (vLLM backend) and reassemble in page order.
 
     Only meaningful for the vLLM backend, whose server batches the in-flight requests. Falls back
-    to sequential extraction for the transformers backend (a single in-process model is not
-    thread-safe to call concurrently).
+    to sequential extraction for the in-process backends (a single loaded model is not thread-safe
+    to call concurrently).
     """
     if not isinstance(backend, VLLMBackend):
         return extract_pdf(pdf_path, backend, dpi=dpi, max_pages=max_pages, verbose=verbose)
     import concurrent.futures as cf
 
+    dpi = _dpi_for(backend, dpi)
     pages = list(render_pages(pdf_path, dpi=dpi, max_pages=max_pages))
     out = {}
     t0 = time.time()

@@ -1,14 +1,14 @@
-# scientificpub2md — runtime dependencies (transformers backend, CPU or GPU)
+# scientificpub2md — runtime dependencies (transformers backend; CPU, GPU, or Apple MPS)
 #
 # Install with:  pip install -r requirements.txt
-# For GPU, install a CUDA build of torch first (see the README), then this file.
+# For NVIDIA GPU, install a CUDA build of torch first (see the README), then this file.
+# On macOS / Apple Silicon, the default CPU/MPS wheels are fine — prefer --engine lightonocr.
 
 PyMuPDF>=1.24        # PDF -> page images
 Pillow>=10.0         # image handling
-transformers>=4.57   # Qwen3-VL (needs Qwen3VLForConditionalGeneration)
-qwen-vl-utils>=0.0.8 # vision-info preprocessing for Qwen-VL
-torch>=2.4           # model runtime (install the CUDA build for GPU)
-accelerate>=0.30     # device_map="auto" model placement
+transformers>=4.57   # runs the models (Qwen3-VL needs >=4.57; LightOnOCR needs a recent build)
+torch>=2.4           # model runtime (install the CUDA build for NVIDIA GPUs)
+accelerate>=0.30     # device placement
 requests>=2.28       # client for the optional vLLM backend
 
 # Optional, advanced: fast batched GPU serving (an OpenAI-compatible server). See serve_vllm.sh.

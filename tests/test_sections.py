@@ -4,7 +4,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scientificpub2md.sections import format_document, to_headers, to_markdown  # noqa: E402
+from scientificpub2md.sections import (  # noqa: E402
+    flatten_headings,
+    format_document,
+    passthrough_markdown,
+    to_headers,
+    to_markdown,
+)
 
 # A tiny stand-in for raw VLM output: page markers + flat '## ' headings the model emits.
 RAW = """\
@@ -81,9 +87,50 @@ def test_markdown_promotes_title_marked_as_heading():
     assert "### Genomic Prediction of HG Biosynthesis" in out  # real sub-heading demoted
 
 
+# A native-Markdown engine (LightOnOCR) emits mixed heading levels + tables/LaTeX directly.
+RAW_NATIVE_MD = """\
+
+<<<PAGE 1>>>
+# A Faithful OCR of a Manuscript
+
+## Methods
+
+### Cell Culture
+Cells were grown at 37C.
+
+| Reagent | Amount |
+|---|---|
+| NaCl | 5 g |
+
+The energy is $E = mc^2$.
+"""
+
+
+def test_native_markdown_passthrough_preserves_levels_and_tables():
+    out = passthrough_markdown(RAW_NATIVE_MD)
+    assert "<<<PAGE" not in out
+    assert "# A Faithful OCR of a Manuscript" in out  # title level preserved
+    assert "## Methods" in out
+    assert "### Cell Culture" in out                   # sub-heading NOT demoted further
+    assert "| Reagent | Amount |" in out               # markdown table kept
+    assert "$E = mc^2$" in out                          # LaTeX kept
+
+
+def test_flatten_headings_collapses_all_levels_to_two():
+    out = flatten_headings(RAW_NATIVE_MD)
+    assert "# A Faithful OCR" not in out.splitlines()[0] or out.splitlines()[0].startswith("## ")
+    assert "## A Faithful OCR of a Manuscript" in out  # '#' -> '##'
+    assert "## Methods" in out
+    assert "## Cell Culture" in out                    # '###' -> '##'
+    assert "### " not in out and "\n# " not in ("\n" + out)
+
+
 def test_format_document_dispatch():
     assert format_document(RAW, "headers") == to_headers(RAW)
     assert format_document(RAW, "md") == to_markdown(RAW)
+    # native_markdown routing
+    assert format_document(RAW_NATIVE_MD, "md", native_markdown=True) == passthrough_markdown(RAW_NATIVE_MD)
+    assert format_document(RAW_NATIVE_MD, "headers", native_markdown=True) == flatten_headings(RAW_NATIVE_MD)
     try:
         format_document(RAW, "bogus")
     except ValueError:
@@ -96,5 +143,7 @@ if __name__ == "__main__":
     test_headers_strips_page_markers_and_keeps_flat()
     test_markdown_promotes_title_and_demotes_subheadings()
     test_markdown_promotes_title_marked_as_heading()
+    test_native_markdown_passthrough_preserves_levels_and_tables()
+    test_flatten_headings_collapses_all_levels_to_two()
     test_format_document_dispatch()
     print("ok — all section tests pass")
