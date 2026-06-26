@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,15 +7,23 @@ name = "scientificpub2md"
 version = "0.2.0"
 description = "Lightweight VLM OCR that turns scientific manuscript PDFs into clean Markdown (.md) or simple '##' headers, on CPU, GPU, or Apple Silicon."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Jamey O'Neill", email = "jimnoneill@gmail.com" }]
 keywords = ["ocr", "pdf", "markdown", "vlm", "qwen", "lightonocr", "scientific-papers", "document-parsing"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Text Processing :: Markup :: Markdown",
 ]
 
@@ -41,6 +49,7 @@ all = ["torchvision>=0.19", "vllm>=0.6"]
 [project.urls]
 Homepage = "https://github.com/jimnoneill/scientificpub2md"
 Repository = "https://github.com/jimnoneill/scientificpub2md"
+Issues = "https://github.com/jimnoneill/scientificpub2md/issues"
 
 [project.scripts]
 scientificpub2md = "scientificpub2md.cli:main"

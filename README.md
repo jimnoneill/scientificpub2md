@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="scientificpub2md" width="120">
+  <img src="https://raw.githubusercontent.com/jimnoneill/scientificpub2md/main/docs/assets/logo.png" alt="scientificpub2md" width="120">
 </p>
 
 <h1 align="center">scientificpub2md</h1>
