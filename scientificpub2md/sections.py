@@ -71,6 +71,77 @@ def passthrough_markdown(doc: str) -> str:
     return _collapse_blank_lines(_strip_page_markers(doc))
 
 
+# A Markdown ATX heading at any level (1–6). Unlike _HEADING_LINE this also matches a single ``# ``.
+_MD_HEADING = re.compile(r"^(\s{0,3})#{1,6}[ \t]+(.*\S)[ \t]*$")
+# A fenced code block boundary (``` or ~~~) — headings inside must not be re-levelled.
+_CODE_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
+# A bare single-integer-numbered top-level section ("3. New Items", "4 Action Items") — but NOT a
+# decimal sub-section ("3.1 …"), which stays a sub-heading.
+_NUM_TOPLEVEL = re.compile(r"^\s*\d{1,3}[.):]?\s+\S")
+_NUM_SUBSECTION = re.compile(r"^\s*\d{1,3}\.\d")
+
+
+def _is_toplevel_section(text: str) -> bool:
+    """True for a heading that belongs at ``## ``: a canonical-vocabulary section or a bare
+    single-integer-numbered section. A decimal sub-section ("3.1 …") is not top-level."""
+    if _NUM_SUBSECTION.match(text):
+        return False
+    return bool(_TOPLEVEL_RE.match(text) or _NUM_TOPLEVEL.match(text))
+
+
+def restructure_markdown(doc: str) -> str:
+    """Re-level a native-Markdown engine's output into a consistent hierarchy.
+
+    Pages are transcribed independently, so a native-Markdown engine (LightOnOCR) can mark the *same*
+    logical section at different ``#`` levels on different pages (e.g. a numbered section coming out
+    ``##`` on one page and ``#`` on another, and running heads emitted as stray ``#`` titles). This
+    normalizes to the shape ``to_markdown`` produces: a single ``# `` title, canonical/numbered
+    top-level sections at ``## ``, every other heading at ``### ``. Body text, tables, LaTeX, and
+    fenced code are left untouched — only heading markers change, so the result stays verbatim.
+    """
+    lines = _strip_page_markers(doc).splitlines()
+
+    # Find the title: the first heading (outside code fences) that is not itself a top-level section,
+    # or a substantial plain-text line before the first heading (matching _detect_title's rules).
+    title_idx, in_fence = None, False
+    for i, raw in enumerate(lines):
+        if _CODE_FENCE.match(raw):
+            in_fence = not in_fence
+            continue
+        if in_fence or not raw.strip():
+            continue
+        m = _MD_HEADING.match(raw)
+        if m:
+            if not _is_toplevel_section(m.group(2).strip()):
+                title_idx = i
+            break
+        line = raw.strip()
+        if 12 <= len(line) <= 300 and "@" not in line and not re.search(r"https?://|\bdoi\b", line, re.I):
+            title_idx = i
+        break
+
+    out, in_fence = [], False
+    for i, raw in enumerate(lines):
+        if _CODE_FENCE.match(raw):
+            in_fence = not in_fence
+            out.append(raw)
+            continue
+        if in_fence:
+            out.append(raw)
+            continue
+        if i == title_idx:
+            m = _MD_HEADING.match(raw)
+            out.append(f"# {(m.group(2) if m else raw).strip()}")
+            continue
+        m = _MD_HEADING.match(raw)
+        if m:
+            head = m.group(2).strip()
+            out.append(f"{'##' if _is_toplevel_section(head) else '###'} {head}")
+        else:
+            out.append(raw)
+    return _collapse_blank_lines("\n".join(out))
+
+
 def _detect_title(lines):
     """Return (title, body_start_index). The title is the first substantial non-heading text line
     that appears before the first heading (skipping short/boilerplate lines). Returns ("", 0) if
@@ -136,8 +207,9 @@ def format_document(doc: str, fmt: str = "md", *, native_markdown: bool = False,
 
     native_markdown=False (Qwen3-VL flat-``## `` convention): 'md' restructures into
     ``# ``/``## ``/``### `` via the section vocabulary; 'headers' keeps the flat ``## ``.
-    native_markdown=True (LightOnOCR already emits structured Markdown): 'md' passes the model's
-    Markdown through untouched; 'headers' flattens all heading levels to ``## ``.
+    native_markdown=True (LightOnOCR emits mixed Markdown levels): 'md' re-levels the model's
+    headings into a consistent ``# ``/``## ``/``### `` hierarchy (body/tables/LaTeX untouched);
+    'headers' flattens all heading levels to ``## ``.
     'clean' (engine-independent): deterministic clean/normalize → junk-stripped, '## '-denoted,
     page-marked, verbatim, parser-ready text with missing headers inferred.
     """
@@ -146,7 +218,7 @@ def format_document(doc: str, fmt: str = "md", *, native_markdown: bool = False,
 
         return clean_document(doc)
     if fmt == "md":
-        return passthrough_markdown(doc) if native_markdown else to_markdown(doc, title=title)
+        return restructure_markdown(doc) if native_markdown else to_markdown(doc, title=title)
     if fmt == "headers":
         return flatten_headings(doc) if native_markdown else to_headers(doc)
     raise ValueError(f"unknown format {fmt!r} (expected 'md', 'headers', or 'clean')")

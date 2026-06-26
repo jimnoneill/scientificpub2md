@@ -90,12 +90,13 @@ md = pdf_to_markdown("paper.pdf", engine="qwen3vl")        # Qwen3-VL-8B + scien
 
 The heading levelling is **deterministic** (a section-name vocabulary, no extra LLM call), so output is reproducible.
 
-> **Heading levels in `md` vs `clean`.** With `lightonocr`, `--format md` passes the model's native
-> Markdown through untouched. Because pages are transcribed independently, the model can assign the
-> *same* logical section different heading levels on different pages (e.g. a numbered section coming
-> out `##` on one page and `#` on another), so the `md` hierarchy can be uneven. If you need a
-> consistent structure, use `--format clean` or `--format headers` — both normalize every heading to
-> a flat `## `.
+> **Consistent heading levels.** Because pages are transcribed independently, a native-Markdown
+> engine (`lightonocr`) can mark the *same* logical section at different `#` levels on different
+> pages (e.g. a numbered section coming out `##` on one page and `#` on another, or a running head
+> emitted as a stray `#` title). `--format md` re-levels deterministically into a single `#` title,
+> canonical/numbered top-level sections at `##`, and everything else at `###` — body text, tables,
+> LaTeX, and fenced code are left untouched. (For the model's raw, un-relevelled Markdown, call
+> `passthrough_markdown()` directly; `--format clean`/`headers` flatten every heading to `## `.)
 
 ### The `clean` format — deterministic, pipeline-ready
 

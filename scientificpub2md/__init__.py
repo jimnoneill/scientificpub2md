@@ -33,6 +33,7 @@ from .sections import (
     flatten_headings,
     format_document,
     passthrough_markdown,
+    restructure_markdown,
     to_headers,
     to_markdown,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "to_headers",
     "flatten_headings",
     "passthrough_markdown",
+    "restructure_markdown",
     "clean_document",
     "DEFAULT_SCRUB",
     "format_document",

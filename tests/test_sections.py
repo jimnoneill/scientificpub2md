@@ -8,6 +8,7 @@ from scientificpub2md.sections import (  # noqa: E402
     flatten_headings,
     format_document,
     passthrough_markdown,
+    restructure_markdown,
     to_headers,
     to_markdown,
 )
@@ -116,6 +117,66 @@ def test_native_markdown_passthrough_preserves_levels_and_tables():
     assert "$E = mc^2$" in out                          # LaTeX kept
 
 
+# Pages are OCR'd independently, so a native engine can give sibling sections different levels and
+# emit running heads as stray '# ' titles — exactly what was observed on a real 4-page document.
+RAW_INCONSISTENT_MD = """\
+
+<<<PAGE 1>>>
+# Weekly Meeting Update
+
+## 1. Action Items
+
+## 2. Milestone Overview
+
+<<<PAGE 2>>>
+### Sub-task Status
+
+<<<PAGE 3>>>
+### 3. New Items
+
+#### Architectural Discrepancy
+
+<<<PAGE 4>>>
+# 4. Action Items for Next Meeting
+
+## Notes
+"""
+
+
+def test_restructure_normalizes_inconsistent_levels():
+    out = restructure_markdown(RAW_INCONSISTENT_MD)
+    lines = out.splitlines()
+    # exactly one '# ' title, and it's the document title (not a later running head / numbered section)
+    h1 = [ln for ln in lines if ln.startswith("# ")]
+    assert h1 == ["# Weekly Meeting Update"], h1
+    # every numbered top-level section lands at '## ' regardless of the level the model emitted
+    for sec in ("## 1. Action Items", "## 2. Milestone Overview", "## 3. New Items",
+                "## 4. Action Items for Next Meeting"):
+        assert sec in out, sec
+    # non-canonical / decimal-ish sub-headings stay '### '
+    assert "### Sub-task Status" in out
+    assert "### Architectural Discrepancy" in out      # was '####', demoted to '###'
+    assert "#### " not in out                            # no level-4+ headings remain
+
+
+def test_restructure_demotes_stray_h1_running_head():
+    raw = "# Real Title\n\nbody\n\n<<<PAGE 2>>>\n# Smith et al.\n\nmore body\n"
+    out = restructure_markdown(raw)
+    assert out.count("\n# ") + out.startswith("# ") == 1  # single H1
+    assert "### Smith et al." in out                      # stray '#' running head demoted
+
+
+def test_restructure_leaves_tables_latex_and_code_fences_untouched():
+    raw = (
+        "# Title\n\n## Methods\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+        "Energy $E = mc^2$.\n\n```python\n# this is code, not a heading\nx = 1\n```\n"
+    )
+    out = restructure_markdown(raw)
+    assert "| A | B |" in out and "| 1 | 2 |" in out      # table preserved
+    assert "$E = mc^2$" in out                             # LaTeX preserved
+    assert "# this is code, not a heading" in out          # '#' inside a code fence NOT re-levelled
+
+
 def test_flatten_headings_collapses_all_levels_to_two():
     out = flatten_headings(RAW_NATIVE_MD)
     assert "# A Faithful OCR" not in out.splitlines()[0] or out.splitlines()[0].startswith("## ")
@@ -129,7 +190,7 @@ def test_format_document_dispatch():
     assert format_document(RAW, "headers") == to_headers(RAW)
     assert format_document(RAW, "md") == to_markdown(RAW)
     # native_markdown routing
-    assert format_document(RAW_NATIVE_MD, "md", native_markdown=True) == passthrough_markdown(RAW_NATIVE_MD)
+    assert format_document(RAW_NATIVE_MD, "md", native_markdown=True) == restructure_markdown(RAW_NATIVE_MD)
     assert format_document(RAW_NATIVE_MD, "headers", native_markdown=True) == flatten_headings(RAW_NATIVE_MD)
     try:
         format_document(RAW, "bogus")
@@ -140,10 +201,7 @@ def test_format_document_dispatch():
 
 
 if __name__ == "__main__":
-    test_headers_strips_page_markers_and_keeps_flat()
-    test_markdown_promotes_title_and_demotes_subheadings()
-    test_markdown_promotes_title_marked_as_heading()
-    test_native_markdown_passthrough_preserves_levels_and_tables()
-    test_flatten_headings_collapses_all_levels_to_two()
-    test_format_document_dispatch()
+    for _name, _fn in sorted(globals().items()):
+        if _name.startswith("test_") and callable(_fn):
+            _fn()
     print("ok — all section tests pass")
