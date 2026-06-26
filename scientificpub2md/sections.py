@@ -139,7 +139,7 @@ def format_document(doc: str, fmt: str = "md", *, native_markdown: bool = False,
     native_markdown=True (LightOnOCR already emits structured Markdown): 'md' passes the model's
     Markdown through untouched; 'headers' flattens all heading levels to ``## ``.
     'clean' (engine-independent): deterministic clean/normalize → junk-stripped, '## '-denoted,
-    page-marked, verbatim, ``section_map``-ready text with missing headers inferred.
+    page-marked, verbatim, parser-ready text with missing headers inferred.
     """
     if fmt == "clean":
         from .clean import clean_document

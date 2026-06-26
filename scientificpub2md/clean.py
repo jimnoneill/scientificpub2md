@@ -2,10 +2,13 @@
 
 A faithful OCR transcribes everything — journal banners, running heads, page numbers, DOIs,
 references, acknowledgements — and uses whatever heading levels it saw. This layer turns that raw
-page-by-page output into clean, ``section_map``-ready text: the same shape the Qwen3-VL scientific
-prompt produced (flat ``## `` headings, ``<<<PAGE n>>>`` markers, junk dropped), but with **no
-generative model** — every step is a deterministic rule, so the result is byte-reproducible and
-**verbatim** (words are never rewritten; lines are only dropped, and headings only marked).
+page-by-page output into clean, parser-ready text: the same shape the Qwen3-VL scientific prompt
+produced (flat ``## `` headings, ``<<<PAGE n>>>`` markers, junk dropped), but with **no generative
+model** — every step is a deterministic rule, so the result is byte-reproducible and **verbatim**
+(words are never rewritten; lines are only dropped, and headings only marked).
+
+This repo stays OCR + deterministic cleanup only — it never calls a second LLM. Anything that needs
+a language model downstream (e.g. mapping headings to canonical sections) lives outside it.
 
 It replicates the editorial decisions the VLM prompt used to make:
   * drop running heads/footers (lines that repeat across pages), page/line numbers, horizontal
@@ -205,7 +208,7 @@ def _scrub_backmatter(lines, scrub_sections):
 
 def clean_document(doc: str, *, scrub_sections=DEFAULT_SCRUB, infer_headers: bool = True,
                    drop_furniture: bool = True, drop_banners: bool = True, min_repeat: int = 3) -> str:
-    """Clean + normalize raw OCR output into ``section_map``-ready, verbatim text.
+    """Clean + normalize raw OCR output into parser-ready, verbatim text.
 
     scrub_sections: back-matter category names to drop. Default = everything the Qwen prompt
         removed: references, acknowledgements, funding, author contributions, competing interests,

@@ -47,7 +47,7 @@ def build_parser():
                     help="output file (single PDF) or directory (multiple); default: alongside each PDF")
     ap.add_argument("-f", "--format", choices=["md", "headers", "clean"], default="md",
                     help="md = structured markdown (.md); headers = flat '## ' headers (.txt); "
-                         "clean = junk-stripped, '## '-denoted, section_map-ready text with inferred "
+                         "clean = junk-stripped, '## '-denoted, parser-ready text with inferred "
                          "headers (.clean.txt). Default: md")
     ap.add_argument("-e", "--engine", choices=["lightonocr", "qwen3vl"], default="lightonocr",
                     help="lightonocr = LightOnOCR-2-1B (1B, fast, Mac-friendly, native tables/LaTeX; no extra deps); "
