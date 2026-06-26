@@ -90,6 +90,13 @@ md = pdf_to_markdown("paper.pdf", engine="qwen3vl")        # Qwen3-VL-8B + scien
 
 The heading levelling is **deterministic** (a section-name vocabulary, no extra LLM call), so output is reproducible.
 
+> **Heading levels in `md` vs `clean`.** With `lightonocr`, `--format md` passes the model's native
+> Markdown through untouched. Because pages are transcribed independently, the model can assign the
+> *same* logical section different heading levels on different pages (e.g. a numbered section coming
+> out `##` on one page and `#` on another), so the `md` hierarchy can be uneven. If you need a
+> consistent structure, use `--format clean` or `--format headers` — both normalize every heading to
+> a flat `## `.
+
 ### The `clean` format — deterministic, pipeline-ready
 
 `clean` is built for feeding a downstream parser (it's the layer that lets a faithful OCR like

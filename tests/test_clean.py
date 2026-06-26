@@ -139,6 +139,43 @@ def test_verbatim_body_preserved():
     assert "It means something." in out
 
 
+# A faithful OCR (LightOnOCR) emits tables as HTML. The same structural tags recur on every
+# table-bearing page, so the running-head detector must NOT treat them as furniture and shred them.
+RAW_TABLES = """\
+
+<<<PAGE 1>>>
+## Results
+<table>
+  <thead><tr><th>Gene</th><th>Fold change</th></tr></thead>
+  <tbody><tr><td>hglB</td><td>2.1</td></tr></tbody>
+</table>
+
+<<<PAGE 2>>>
+## Discussion
+<table>
+  <thead><tr><th>Strain</th><th>Phenotype</th></tr></thead>
+  <tbody><tr><td>WT</td><td>het+</td></tr></tbody>
+</table>
+
+<<<PAGE 3>>>
+## Conclusions
+<table>
+  <thead><tr><th>Model</th><th>Score</th></tr></thead>
+  <tbody><tr><td>ours</td><td>0.91</td></tr></tbody>
+</table>
+"""
+
+
+def test_html_tables_survive_furniture_detection():
+    out = clean_document(RAW_TABLES)
+    # structural tags repeat on all 3 pages but must be kept (not dropped as running heads)
+    assert out.count("<table>") == 3, "table opening tags were dropped"
+    assert out.count("</table>") == 3, "table closing tags were dropped"
+    assert "<tr>" in out and "<thead>" in out, "table structure shredded"
+    # and no cell content is orphaned outside a table
+    assert "hglB" in out and "0.91" in out
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

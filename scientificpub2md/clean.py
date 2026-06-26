@@ -53,6 +53,13 @@ DEFAULT_SCRUB = tuple(_BACKMATTER_PATTERNS)
 
 _PAGE_LINE = re.compile(r"^<<<PAGE \d+>>>\s*$")
 
+# A faithful OCR (LightOnOCR) emits tables as HTML (<table>...</table>). Its structural tags
+# (<tr>, <thead>, </td>, ...) repeat on every table-bearing page, so the running-head detector
+# would flag them as furniture and strip them — shredding the table into orphaned <td>/<th> lines.
+# Track table spans and pass them through verbatim instead (clean's output is meant to be verbatim).
+_TABLE_OPEN = re.compile(r"<table\b", re.I)
+_TABLE_CLOSE = re.compile(r"</table\s*>", re.I)
+
 # A whole-line section heading (anchored) → an unmarked heading we should promote to '## '.
 _HEADING_ONLY = re.compile(r"^\s*" + _NUMPREFIX + _VOCAB + r"\s*[:.–-]?\s*$", re.I)
 # A run-in heading: "Introduction: <prose>" / "Materials and Methods. <prose>". Colon/period
@@ -104,12 +111,24 @@ def _split_pages(doc: str):
 
 
 def _furniture_keys(pages, min_repeat: int):
-    """Normalized keys of short non-heading lines that recur on >= min_repeat pages (running heads)."""
+    """Normalized keys of short non-heading lines that recur on >= min_repeat pages (running heads).
+
+    HTML table lines are skipped entirely: their structural tags repeat across every table-bearing
+    page and would otherwise be mistaken for running heads and dropped.
+    """
     c = Counter()
+    in_table = False
     for _marker, lines in pages:
         seen = set()
         for ln in lines:
             s = ln.strip()
+            if in_table:
+                if _TABLE_CLOSE.search(s):
+                    in_table = False
+                continue
+            if _TABLE_OPEN.search(s):
+                in_table = not _TABLE_CLOSE.search(s)
+                continue
             if not s or _ANY_HEADING.match(ln) or len(s) > 100:
                 continue
             k = _norm_key(s)
@@ -128,8 +147,12 @@ def _url_doi_only(s: str) -> bool:
 
 
 def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, furn_keys):
-    """Per-line pass: drop junk, normalize headings to '## ', infer missing headers. Returns lines."""
-    out, seen_section = [], False
+    """Per-line pass: drop junk, normalize headings to '## ', infer missing headers. Returns lines.
+
+    HTML tables (LightOnOCR's native table format) are emitted verbatim — none of the per-line junk
+    filtering, heading normalization, or header inference is applied inside a <table>...</table> span.
+    """
+    out, seen_section, in_table = [], False, False
 
     def _emit_heading(text):
         nonlocal seen_section
@@ -143,6 +166,15 @@ def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, 
             out.append(marker)
         for ln in lines:
             s = ln.strip()
+            if in_table:
+                out.append(ln)
+                if _TABLE_CLOSE.search(s):
+                    in_table = False
+                continue
+            if _TABLE_OPEN.search(s):
+                out.append(ln)
+                in_table = not _TABLE_CLOSE.search(s)
+                continue
             if not s:
                 out.append("")
                 continue
