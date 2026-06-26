@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/scientificpub2md/"><img src="https://img.shields.io/pypi/v/scientificpub2md?style=flat-square&logo=pypi&logoColor=white&color=4f46e5" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/scientificpub2md/"><img src="https://img.shields.io/pypi/dm/scientificpub2md?style=flat-square&color=06b6d4" alt="PyPI downloads"></a>
+  <a href="https://pepy.tech/project/scientificpub2md"><img src="https://img.shields.io/pepy/dt/scientificpub2md?style=flat-square&color=06b6d4&label=downloads" alt="Total downloads"></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/Engine-Qwen3--VL%20%7C%20LightOnOCR-4f46e5?style=flat-square" alt="Engines">
   <img src="https://img.shields.io/badge/Runs%20on-CPU%20%7C%20GPU%20%7C%20Apple%20MPS-06b6d4?style=flat-square" alt="Runs on CPU, GPU, MPS">
