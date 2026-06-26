@@ -132,15 +132,21 @@ def to_markdown(doc: str, title: str | None = None) -> str:
 
 def format_document(doc: str, fmt: str = "md", *, native_markdown: bool = False,
                     title: str | None = None) -> str:
-    """Render the raw extractor output as 'md' or 'headers'.
+    """Render the raw extractor output as 'md', 'headers', or 'clean'.
 
     native_markdown=False (Qwen3-VL flat-``## `` convention): 'md' restructures into
     ``# ``/``## ``/``### `` via the section vocabulary; 'headers' keeps the flat ``## ``.
     native_markdown=True (LightOnOCR already emits structured Markdown): 'md' passes the model's
     Markdown through untouched; 'headers' flattens all heading levels to ``## ``.
+    'clean' (engine-independent): deterministic clean/normalize → junk-stripped, '## '-denoted,
+    page-marked, verbatim, ``section_map``-ready text with missing headers inferred.
     """
+    if fmt == "clean":
+        from .clean import clean_document
+
+        return clean_document(doc)
     if fmt == "md":
         return passthrough_markdown(doc) if native_markdown else to_markdown(doc, title=title)
     if fmt == "headers":
         return flatten_headings(doc) if native_markdown else to_headers(doc)
-    raise ValueError(f"unknown format {fmt!r} (expected 'md' or 'headers')")
+    raise ValueError(f"unknown format {fmt!r} (expected 'md', 'headers', or 'clean')")

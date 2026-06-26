@@ -84,8 +84,27 @@ md = pdf_to_markdown("paper.pdf", engine="qwen3vl")        # Qwen3-VL-8B + scien
 |---|---|---|---|
 | **Markdown** (default) | `--format md` | `.md` | Structured: title → `#`, canonical sections (Abstract, Methods, Results, …) → `##`, sub-headings → `###`. |
 | **Simple headers** | `--format headers` | `.txt` | The clean full text with every heading flat at `##`. Minimal. |
+| **Clean** | `--format clean` | `.clean.txt` | Junk-stripped, flat-`##`, **verbatim** text with missing headers inferred — ready for a downstream section/feature pipeline. |
 
 The heading levelling is **deterministic** (a section-name vocabulary, no extra LLM call), so output is reproducible.
+
+### The `clean` format — deterministic, pipeline-ready
+
+`clean` is built for feeding a downstream parser (it's the layer that lets a faithful OCR like
+LightOnOCR stand in for an editorial, prompt-steered VLM). It applies, with **no model** (every
+step is a rule, so it's byte-reproducible and never rewrites words — lines are only dropped and
+headings only marked):
+
+- drops running heads/footers (lines repeating across pages), page/line numbers, horizontal rules, DOI/copyright-only lines, and front-matter banners (`OPEN ACCESS`, `RESEARCH ARTICLE`, journal mastheads like `PNAS`)
+- scrubs back-matter sections — references, acknowledgements, funding, author contributions, competing interests, data availability, supplementary (configurable via `clean_document(..., scrub_sections=...)`)
+- normalizes every heading to a flat `## `
+- **infers missing headers** — promotes unmarked section-vocabulary lines and splits run-in headers (`Introduction: …`) onto their own `## ` line, the way a prompted VLM would
+
+```python
+from scientificpub2md import make_backend, extract_pdf, clean_document
+raw = extract_pdf("paper.pdf", make_backend("transformers", engine="lightonocr"))
+text = clean_document(raw)                 # verbatim, junk-stripped, '## '-denoted
+```
 
 ## Two engines
 

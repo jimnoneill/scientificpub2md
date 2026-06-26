@@ -1,0 +1,146 @@
+"""Tests for the deterministic clean/normalize layer (no model needed)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scientificpub2md.clean import DEFAULT_SCRUB, _classify_backmatter, clean_document  # noqa: E402
+
+# Faithful-OCR style output: native markdown levels, banners, running heads, page numbers,
+# a run-in header, an unmarked header, and a full back-matter tail.
+RAW = """\
+
+<<<PAGE 1>>>
+# PNAS
+## RESEARCH ARTICLE | MICROBIOLOGY
+### OPEN ACCESS
+
+# Heterocyte glycolipid biosynthesis in cyanobacteria
+
+Edited by Roger Summons; received July 13, 2024; accepted December 3, 2024
+
+## Abstract
+Heterocytes are specialized cells.
+
+Smith et al. | PNAS | 2024
+1
+
+<<<PAGE 2>>>
+Smith et al. | PNAS | 2024
+2
+
+Introduction: Nitrogen fixation is central to cyanobacterial ecology and has been studied for decades.
+
+Materials and Methods
+
+### Statistical Analysis
+
+We used t-tests. doi:10.1234/abcd
+
+<<<PAGE 3>>>
+Smith et al. | PNAS | 2024
+3
+
+## Results
+We found things. See https://example.org/data
+
+## Discussion
+It means something.
+
+## Data Availability
+Sequences are in GenBank.
+
+## Funding
+Funded by NSF grant 123.
+
+## Acknowledgements
+We thank the lab.
+
+## References
+1. Author A. Title. Journal. 2020.
+2. Author B. Title. Journal. 2021.
+"""
+
+
+def _run():
+    return clean_document(RAW)
+
+
+def test_drops_running_heads_and_page_numbers():
+    out = _run()
+    assert "Smith et al. | PNAS | 2024" not in out   # running head (repeats on 3 pages)
+    assert "\n1\n" not in ("\n" + out + "\n")          # bare page numbers gone
+
+
+def test_drops_front_matter_banners_and_meta():
+    out = _run()
+    assert "RESEARCH ARTICLE" not in out
+    assert "OPEN ACCESS" not in out
+    assert "PNAS" not in out                            # single all-caps journal masthead dropped
+    assert "Edited by Roger Summons" not in out        # editorial metadata line
+
+
+def test_normalizes_headings_to_flat_h2():
+    out = _run()
+    # the title was '# ' and a banner was '### ' — everything kept becomes '## '
+    assert "## Heterocyte glycolipid biosynthesis in cyanobacteria" in out
+    assert "\n# " not in ("\n" + out)                  # no level-1 headings remain
+    assert "### " not in out                            # no level-3 headings remain
+
+
+def test_infers_missing_headers():
+    out = _run()
+    assert "## Introduction" in out                     # run-in header split out
+    assert "Nitrogen fixation is central" in out        # its body preserved
+    assert "## Materials and Methods" in out            # bare vocab line promoted to a header
+    assert "## Statistical Analysis" in out             # '### ' sub-heading normalized to '## '
+
+
+def test_scrubs_full_backmatter_set_keeps_body_and_abstract():
+    out = _run()
+    # kept
+    assert "## Abstract" in out and "Heterocytes are specialized cells." in out
+    assert "## Results" in out and "## Discussion" in out
+    # scrubbed (full Qwen set)
+    for gone in ("## References", "## Acknowledgements", "## Funding", "## Data Availability",
+                 "Sequences are in GenBank", "Funded by NSF", "We thank the lab", "Author A. Title"):
+        assert gone not in out, f"should have scrubbed: {gone!r}"
+
+
+def test_default_scrub_is_full_qwen_set():
+    assert set(DEFAULT_SCRUB) == {
+        "references", "acknowledgements", "funding", "author contributions",
+        "competing interests", "data availability", "supplementary",
+    }
+
+
+def test_classifier_categories():
+    assert _classify_backmatter("References") == "references"
+    assert _classify_backmatter("Acknowledgments") == "acknowledgements"   # US spelling
+    assert _classify_backmatter("Author Contributions") == "author contributions"
+    assert _classify_backmatter("Competing Interests") == "competing interests"
+    assert _classify_backmatter("Declaration of Competing Interest") == "competing interests"
+    assert _classify_backmatter("Data and Code Availability") == "data availability"
+    assert _classify_backmatter("Supplementary Information") == "supplementary"
+    assert _classify_backmatter("Methods") == "other"
+    assert _classify_backmatter("Results") == "other"
+
+
+def test_configurable_scrub_keeps_unlisted():
+    out = clean_document(RAW, scrub_sections=("references",))
+    assert "## References" not in out
+    assert "## Funding" in out                          # not scrubbed when not requested
+    assert "## Acknowledgements" in out
+
+
+def test_verbatim_body_preserved():
+    out = _run()
+    assert "We found things." in out                    # body words untouched
+    assert "It means something." in out
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
+    print("ok — all clean tests pass")

@@ -10,7 +10,7 @@ from . import __version__
 from .extract import make_backend
 from .sections import format_document
 
-_EXT = {"md": ".md", "headers": ".txt"}
+_EXT = {"md": ".md", "headers": ".txt", "clean": ".clean.txt"}
 
 
 def _gather_inputs(paths):
@@ -45,8 +45,10 @@ def build_parser():
     ap.add_argument("inputs", nargs="+", help="PDF file(s) or a directory of PDFs")
     ap.add_argument("-o", "--out", default=None,
                     help="output file (single PDF) or directory (multiple); default: alongside each PDF")
-    ap.add_argument("-f", "--format", choices=["md", "headers"], default="md",
-                    help="md = structured markdown (.md); headers = flat '## ' headers (.txt). Default: md")
+    ap.add_argument("-f", "--format", choices=["md", "headers", "clean"], default="md",
+                    help="md = structured markdown (.md); headers = flat '## ' headers (.txt); "
+                         "clean = junk-stripped, '## '-denoted, section_map-ready text with inferred "
+                         "headers (.clean.txt). Default: md")
     ap.add_argument("-e", "--engine", choices=["lightonocr", "qwen3vl"], default="lightonocr",
                     help="lightonocr = LightOnOCR-2-1B (1B, fast, Mac-friendly, native tables/LaTeX; no extra deps); "
                          "qwen3vl = Qwen3-VL-8B + scientific prompt (drops back matter; needs [qwen] extra for the "

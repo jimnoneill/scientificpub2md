@@ -28,6 +28,7 @@ from .extract import (
     make_backend,
     render_pages,
 )
+from .clean import DEFAULT_SCRUB, clean_document
 from .sections import (
     flatten_headings,
     format_document,
@@ -50,6 +51,8 @@ __all__ = [
     "to_headers",
     "flatten_headings",
     "passthrough_markdown",
+    "clean_document",
+    "DEFAULT_SCRUB",
     "format_document",
     "convert_pdf",
     "pdf_to_markdown",
