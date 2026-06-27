@@ -197,6 +197,14 @@ scientificpub2md ./pdfs/ -o ./md/ --backend vllm --engine lightonocr     # light
 
 The server can be remote — set `SCIPUB2MD_VLLM_URL=http://host:8000` (or pass `--vllm-url`).
 
+Without standing up a server, the **in-process** transformers backend can batch pages in one forward
+pass with `--batch-size` — a throughput win on a GPU (greedy decoding makes the output equivalent to
+`--batch-size 1`). It needs enough VRAM for the batch, so it doesn't help on CPU:
+
+```bash
+scientificpub2md paper.pdf --batch-size 8        # 8 pages per forward pass (GPU)
+```
+
 ## How it works
 
 1. **Render** — each PDF page → a PNG with PyMuPDF (170 DPI qwen3vl / 200 DPI lightonocr).

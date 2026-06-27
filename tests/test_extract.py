@@ -34,6 +34,20 @@ class FakeBackend:
         return text
 
 
+class FakeBatchBackend(FakeBackend):
+    """Adds a transcribe_batch so the batched code path can be exercised model-free."""
+
+    def __init__(self, pages, **kw):
+        super().__init__(pages, **kw)
+        self.batch_calls = 0
+        self.max_batch = 0
+
+    def transcribe_batch(self, pil_imgs, max_new_tokens=4096):
+        self.batch_calls += 1
+        self.max_batch = max(self.max_batch, len(pil_imgs))
+        return [self.transcribe(im) for im in pil_imgs]
+
+
 def _make_pdf(n_pages):
     import fitz
 
@@ -82,6 +96,26 @@ def test_convert_pdf_format_routing():
     # 'headers' flattens everything to '##'
     headers = convert_pdf(pdf, FakeBackend(pages, native_markdown=True), fmt="headers", verbose=False)
     assert "### " not in headers and "\n# " not in ("\n" + headers)
+
+
+def test_batched_extraction_matches_sequential_and_preserves_order():
+    pdf = _make_pdf(5)
+    pages = ["## A\nuno", "## B\ndos", "## C\ntres", "## D\ncuatro", "## E\ncinco"]
+    seq = extract_pdf(pdf, FakeBatchBackend(pages), verbose=False)          # batch_size=1 default
+    be = FakeBatchBackend(pages)
+    batched = extract_pdf(pdf, be, verbose=False, batch_size=2)
+    assert batched == seq                       # identical output regardless of batching
+    assert be.batch_calls == 3                  # 2 + 2 + 1
+    assert be.max_batch == 2                     # never exceeds batch_size
+    assert "uno" in batched and "cinco" in batched
+    assert batched.index("uno") < batched.index("cinco")  # order preserved
+
+
+def test_batch_size_falls_back_when_backend_has_no_transcribe_batch():
+    pdf = _make_pdf(2)
+    # plain FakeBackend has no transcribe_batch -> must still work via per-page path
+    out = extract_pdf(pdf, FakeBackend(["x", "y"]), verbose=False, batch_size=4)
+    assert "<<<PAGE 1>>>" in out and "<<<PAGE 2>>>" in out and "x" in out and "y" in out
 
 
 def test_golden_fuzzy_match_pattern():

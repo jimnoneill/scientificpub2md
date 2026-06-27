@@ -61,6 +61,9 @@ def build_parser():
     ap.add_argument("--dpi", type=int, default=None, help="page render DPI (default: 170 qwen3vl / 200 lightonocr)")
     ap.add_argument("--max-pages", type=int, default=None, help="limit pages per PDF (debugging)")
     ap.add_argument("--workers", type=int, default=8, help="concurrent pages for the vllm backend (default: 8)")
+    ap.add_argument("--batch-size", type=int, default=1,
+                    help="pages per batched forward pass for the in-process transformers backends "
+                         "(default: 1; >1 is a GPU throughput win, output is equivalent to 1)")
     ap.add_argument("--keep-backmatter", action="store_true",
                     help="keep References/Acknowledgements/Funding etc. (default: drop them)")
     ap.add_argument("--vllm-url", default=None, help="vLLM server URL (default: $SCIPUB2MD_VLLM_URL or http://localhost:8000)")
@@ -103,7 +106,7 @@ def main(argv=None):
         try:
             raw = extract_pdf_concurrent(
                 pdf, backend, dpi=args.dpi, max_pages=args.max_pages,
-                workers=args.workers, verbose=verbose,
+                workers=args.workers, verbose=verbose, batch_size=args.batch_size,
             )
             doc = format_document(raw, fmt=args.format, native_markdown=native_md)
             with open(outp, "w") as fh:

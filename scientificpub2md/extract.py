@@ -83,6 +83,25 @@ def _resolve_device(device, *, allow_mps=False):
     return device
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def _left_padding(processor):
+    """Temporarily set the processor's tokenizer to left-pad — required for correct decoder-only
+    batched generation (so the generated tokens of every sequence in the batch stay aligned)."""
+    tok = getattr(processor, "tokenizer", None)
+    if tok is None or getattr(tok, "padding_side", None) == "left":
+        yield
+        return
+    prev = tok.padding_side
+    tok.padding_side = "left"
+    try:
+        yield
+    finally:
+        tok.padding_side = prev
+
+
 # --------------------------------------------------------------------------------------
 # Qwen3-VL via transformers (in-process; CPU or GPU)
 # --------------------------------------------------------------------------------------
@@ -172,6 +191,34 @@ class TransformersBackend:
         )[0].strip()
         return "" if _is_skip(out) else out
 
+    def transcribe_batch(self, pil_imgs, max_new_tokens=6144):
+        """Transcribe several pages in one padded ``generate`` call (throughput win on GPU).
+
+        Greedy + a correct attention mask makes this equivalent to per-page ``transcribe``;
+        left-padding keeps decoder-only generation aligned across the batch."""
+        import torch
+
+        if len(pil_imgs) == 1:
+            return [self.transcribe(pil_imgs[0], max_new_tokens=max_new_tokens)]
+        self._load()
+        prompt = page_prompt(self.keep_backmatter)
+        conversations = [
+            [{"role": "user", "content": [{"type": "image", "image": im}, {"type": "text", "text": prompt}]}]
+            for im in pil_imgs
+        ]
+        with _left_padding(self._processor):
+            inputs = self._processor.apply_chat_template(
+                conversations, add_generation_prompt=True, tokenize=True, return_dict=True,
+                return_tensors="pt", padding=True,
+            ).to(self._model.device)
+        with torch.no_grad():
+            gen = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        trimmed = gen[:, inputs["input_ids"].shape[1]:]
+        outs = self._processor.batch_decode(
+            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )
+        return ["" if _is_skip(o.strip()) else o.strip() for o in outs]
+
 
 # --------------------------------------------------------------------------------------
 # LightOnOCR-2-1B via transformers (in-process; CPU, CUDA, or MPS)
@@ -246,6 +293,32 @@ class LightOnOCRBackend:
             out_ids = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         gen = out_ids[0, inputs["input_ids"].shape[1]:]
         return self._processor.decode(gen, skip_special_tokens=True).strip()
+
+    def transcribe_batch(self, pil_imgs, max_new_tokens=4096):
+        """Transcribe several pages in one padded ``generate`` call (throughput win on GPU).
+
+        Greedy + a correct attention mask makes this byte-identical to calling ``transcribe`` per
+        page; left-padding is used so decoder-only generation stays aligned across the batch."""
+        import torch
+
+        if len(pil_imgs) == 1:
+            return [self.transcribe(pil_imgs[0], max_new_tokens=max_new_tokens)]
+        self._load()
+        imgs = [_resize_longest(im, self.resize_longest) for im in pil_imgs]
+        conversations = [[{"role": "user", "content": [{"type": "image", "image": im}]}] for im in imgs]
+        with _left_padding(self._processor):
+            inputs = self._processor.apply_chat_template(
+                conversations, add_generation_prompt=True, tokenize=True, return_dict=True,
+                return_tensors="pt", padding=True,
+            )
+        inputs = {
+            k: (v.to(device=self.device, dtype=self._dtype) if v.is_floating_point() else v.to(self.device))
+            for k, v in inputs.items()
+        }
+        with torch.no_grad():
+            out_ids = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        gen = out_ids[:, inputs["input_ids"].shape[1]:]
+        return [t.strip() for t in self._processor.batch_decode(gen, skip_special_tokens=True)]
 
 
 # --------------------------------------------------------------------------------------
@@ -348,28 +421,54 @@ def _dpi_for(backend, dpi):
     return dpi if dpi is not None else getattr(backend, "default_dpi", DEFAULT_DPI)
 
 
-def extract_pdf(pdf_path, backend, dpi=None, max_pages=None, verbose=True):
-    """Render + transcribe every page sequentially; concatenate with page markers. No truncation."""
+def extract_pdf(pdf_path, backend, dpi=None, max_pages=None, verbose=True, batch_size=1):
+    """Render + transcribe every page; concatenate with page markers. No truncation.
+
+    batch_size > 1 transcribes pages in padded batches via ``backend.transcribe_batch`` (a GPU
+    throughput win; greedy decoding keeps it equivalent to the per-page path). Backends without a
+    ``transcribe_batch`` fall back to per-page transcription.
+    """
     dpi = _dpi_for(backend, dpi)
+    can_batch = batch_size and batch_size > 1 and hasattr(backend, "transcribe_batch")
     parts = []
     t0 = time.time()
+    batch = []  # list of (pno, total, img) awaiting a batched transcribe
+
+    def _flush():
+        imgs = [img for _pno, _total, img in batch]
+        texts = backend.transcribe_batch(imgs) if can_batch else [backend.transcribe(imgs[0])]
+        for (pno, total, _img), txt in zip(batch, texts):
+            parts.append(f"\n\n{PAGE_MARKER.format(n=pno)}\n{txt}")
+            if verbose:
+                print(f"    page {pno}/{total}: {len(txt)} chars ({time.time() - t0:.0f}s)", flush=True)
+        batch.clear()
+
     for pno, total, img in render_pages(pdf_path, dpi=dpi, max_pages=max_pages):
-        txt = backend.transcribe(img)
-        parts.append(f"\n\n{PAGE_MARKER.format(n=pno)}\n{txt}")
-        if verbose:
-            print(f"    page {pno}/{total}: {len(txt)} chars ({time.time() - t0:.0f}s)", flush=True)
+        if not can_batch:
+            txt = backend.transcribe(img)
+            parts.append(f"\n\n{PAGE_MARKER.format(n=pno)}\n{txt}")
+            if verbose:
+                print(f"    page {pno}/{total}: {len(txt)} chars ({time.time() - t0:.0f}s)", flush=True)
+            continue
+        batch.append((pno, total, img))
+        if len(batch) >= batch_size:
+            _flush()
+    if batch:
+        _flush()
     return "".join(parts).strip()
 
 
-def extract_pdf_concurrent(pdf_path, backend, dpi=None, max_pages=None, workers=8, verbose=True):
+def extract_pdf_concurrent(pdf_path, backend, dpi=None, max_pages=None, workers=8, verbose=True,
+                           batch_size=1):
     """Transcribe pages concurrently (vLLM backend) and reassemble in page order.
 
     Only meaningful for the vLLM backend, whose server batches the in-flight requests. Falls back
-    to sequential extraction for the in-process backends (a single loaded model is not thread-safe
-    to call concurrently).
+    to (optionally batched) in-process extraction for the transformers backends — a single loaded
+    model is not thread-safe to call concurrently, but ``batch_size`` batches pages in one forward.
     """
     if not isinstance(backend, VLLMBackend):
-        return extract_pdf(pdf_path, backend, dpi=dpi, max_pages=max_pages, verbose=verbose)
+        return extract_pdf(pdf_path, backend, dpi=dpi, max_pages=max_pages, verbose=verbose,
+                           batch_size=batch_size)
     import concurrent.futures as cf
 
     dpi = _dpi_for(backend, dpi)

@@ -63,27 +63,30 @@ __all__ = [
 ]
 
 
-def convert_pdf(pdf_path, backend, fmt="md", *, dpi=None, max_pages=None, workers=8, verbose=True):
-    """Extract a PDF with ``backend`` and return it formatted as 'md' or 'headers'.
+def convert_pdf(pdf_path, backend, fmt="md", *, dpi=None, max_pages=None, workers=8, verbose=True,
+                batch_size=1):
+    """Extract a PDF with ``backend`` and return it formatted as 'md', 'headers', or 'clean'.
 
     The right format treatment is chosen from the backend's output convention
     (``backend.native_markdown``): native-Markdown engines pass through / flatten, while the
-    flat-``## `` engine is restructured.
+    flat-``## `` engine is restructured. ``batch_size`` > 1 batches pages for the in-process backends.
     """
     raw = extract_pdf_concurrent(
-        pdf_path, backend, dpi=dpi, max_pages=max_pages, workers=workers, verbose=verbose
+        pdf_path, backend, dpi=dpi, max_pages=max_pages, workers=workers, verbose=verbose,
+        batch_size=batch_size,
     )
     return format_document(raw, fmt=fmt, native_markdown=getattr(backend, "native_markdown", False))
 
 
 def pdf_to_markdown(pdf_path, *, engine="lightonocr", device="auto", model=None, fmt="md", dpi=None,
-                    max_pages=None, keep_backmatter=False, verbose=True):
+                    max_pages=None, keep_backmatter=False, verbose=True, batch_size=1):
     """One-call convenience: extract ``pdf_path`` with the in-process transformers backend.
 
-    engine='lightonocr' (default) or 'qwen3vl'. Returns the document as Markdown ('md', default)
-    or simple ``## `` headers ('headers').
+    engine='lightonocr' (default) or 'qwen3vl'. Returns the document as Markdown ('md', default),
+    simple ``## `` headers ('headers'), or cleaned text ('clean'). batch_size > 1 batches pages.
     """
     backend = make_backend(
         "transformers", engine=engine, device=device, model=model, keep_backmatter=keep_backmatter
     )
-    return convert_pdf(pdf_path, backend, fmt=fmt, dpi=dpi, max_pages=max_pages, verbose=verbose)
+    return convert_pdf(pdf_path, backend, fmt=fmt, dpi=dpi, max_pages=max_pages, verbose=verbose,
+                       batch_size=batch_size)
