@@ -32,6 +32,7 @@ from .clean import DEFAULT_SCRUB, clean_document
 from .sections import (
     flatten_headings,
     format_document,
+    html_tables_to_markdown,
     passthrough_markdown,
     restructure_markdown,
     to_headers,
@@ -53,6 +54,7 @@ __all__ = [
     "flatten_headings",
     "passthrough_markdown",
     "restructure_markdown",
+    "html_tables_to_markdown",
     "clean_document",
     "DEFAULT_SCRUB",
     "format_document",

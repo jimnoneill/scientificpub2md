@@ -14,6 +14,7 @@ output is reproducible and the package stays dependency-light.
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 
 # Page markers inserted by the extractor between pages.
 _PAGE_RE = re.compile(r"<<<PAGE \d+>>>")
@@ -71,6 +72,83 @@ def passthrough_markdown(doc: str) -> str:
     return _collapse_blank_lines(_strip_page_markers(doc))
 
 
+# --------------------------------------------------------------------------------------
+# HTML table -> Markdown table (LightOnOCR emits tables as HTML; the 'md' format prefers Markdown)
+# --------------------------------------------------------------------------------------
+_TABLE_BLOCK = re.compile(r"<table\b.*?</table\s*>", re.I | re.S)
+# A few inline tags map to Markdown; everything else inside a cell is dropped to its text.
+_INLINE_MD = {"strong": "**", "b": "**", "em": "*", "i": "*", "code": "`"}
+
+
+class _TableExtractor(HTMLParser):
+    """Collect an HTML ``<table>`` into rows of cell strings, mapping a few inline tags to Markdown."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows = []          # list[list[str]] — one list of cell texts per <tr>
+        self._row = None
+        self._cell = None
+
+    def _emit(self, s):
+        if self._cell is not None:
+            self._cell.append(s)
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t == "tr":
+            self._row = []
+        elif t in ("td", "th"):
+            self._cell = []
+        elif t == "br":
+            self._emit(" ")
+        elif t in _INLINE_MD:
+            self._emit(_INLINE_MD[t])
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if t in ("td", "th"):
+            if self._cell is not None and self._row is not None:
+                cell = re.sub(r"\s+", " ", "".join(self._cell)).strip().replace("|", r"\|")
+                self._row.append(cell)
+            self._cell = None
+        elif t == "tr":
+            if self._row:
+                self.rows.append(self._row)
+            self._row = None
+        elif t in _INLINE_MD:
+            self._emit(_INLINE_MD[t])
+
+    def handle_data(self, data):
+        self._emit(data)
+
+
+def _table_to_markdown(html: str) -> str:
+    """Convert one ``<table>...</table>`` block to a GitHub Markdown table (first row = header).
+
+    Returns the original HTML unchanged if it can't be parsed into a grid (e.g. nested/empty), so
+    nothing is ever lost."""
+    p = _TableExtractor()
+    try:
+        p.feed(html)
+        p.close()
+    except Exception:
+        return html
+    rows = p.rows
+    if not rows:
+        return html
+    ncol = max(len(r) for r in rows)
+    rows = [r + [""] * (ncol - len(r)) for r in rows]
+    header, body = rows[0], rows[1:]
+    md = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * ncol) + " |"]
+    md += ["| " + " | ".join(r) + " |" for r in body]
+    return "\n" + "\n".join(md) + "\n"
+
+
+def html_tables_to_markdown(text: str) -> str:
+    """Replace every HTML ``<table>`` block in ``text`` with an equivalent Markdown table."""
+    return _TABLE_BLOCK.sub(lambda m: _table_to_markdown(m.group(0)), text)
+
+
 # A Markdown ATX heading at any level (1–6). Unlike _HEADING_LINE this also matches a single ``# ``.
 _MD_HEADING = re.compile(r"^(\s{0,3})#{1,6}[ \t]+(.*\S)[ \t]*$")
 # A fenced code block boundary (``` or ~~~) — headings inside must not be re-levelled.
@@ -96,10 +174,11 @@ def restructure_markdown(doc: str) -> str:
     logical section at different ``#`` levels on different pages (e.g. a numbered section coming out
     ``##`` on one page and ``#`` on another, and running heads emitted as stray ``#`` titles). This
     normalizes to the shape ``to_markdown`` produces: a single ``# `` title, canonical/numbered
-    top-level sections at ``## ``, every other heading at ``### ``. Body text, tables, LaTeX, and
-    fenced code are left untouched — only heading markers change, so the result stays verbatim.
+    top-level sections at ``## ``, every other heading at ``### ``. HTML tables (LightOnOCR's native
+    table format) are converted to Markdown tables; body text, LaTeX, and fenced code are otherwise
+    left untouched — only heading markers and table syntax change, so the prose stays verbatim.
     """
-    lines = _strip_page_markers(doc).splitlines()
+    lines = html_tables_to_markdown(_strip_page_markers(doc)).splitlines()
 
     # Find the title: the first heading (outside code fences) that is not itself a top-level section,
     # or a substantial plain-text line before the first heading (matching _detect_title's rules).

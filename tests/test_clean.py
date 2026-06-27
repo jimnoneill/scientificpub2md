@@ -176,6 +176,36 @@ def test_html_tables_survive_furniture_detection():
     assert "hglB" in out and "0.91" in out
 
 
+# A non-paper document (no Abstract/Introduction/Methods/… heading) so seen_section never flips.
+# Front-matter-only filters must disarm after the window, or they'd eat body lines all the way down.
+RAW_NONPAPER = """\
+
+<<<PAGE 1>>>
+## Weekly Report
+Correspondence about this report goes to the front desk.
+body line a
+body line b
+body line c
+Published online dashboards are now available to all staff this quarter.
+"""
+
+
+def test_front_matter_window_disarms_for_nonpaper_docs():
+    # tiny window: the early "Correspondence …" line is still in front matter (dropped),
+    # but the later "Published online …" body line is past the window and kept.
+    out = clean_document(RAW_NONPAPER, front_matter_window=3)
+    assert "Correspondence about this report" not in out   # within window -> dropped as meta
+    assert "Published online dashboards are now available" in out  # past window -> kept
+    assert "## Weekly Report" in out
+
+
+def test_front_matter_filters_still_apply_at_top():
+    # with a generous window the meta line at the very top is dropped, as before
+    out = clean_document(RAW_NONPAPER)
+    assert "Correspondence about this report" not in out
+    assert "body line a" in out
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

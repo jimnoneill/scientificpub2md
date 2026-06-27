@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scientificpub2md.sections import (  # noqa: E402
     flatten_headings,
     format_document,
+    html_tables_to_markdown,
     passthrough_markdown,
     restructure_markdown,
     to_headers,
@@ -175,6 +176,39 @@ def test_restructure_leaves_tables_latex_and_code_fences_untouched():
     assert "| A | B |" in out and "| 1 | 2 |" in out      # table preserved
     assert "$E = mc^2$" in out                             # LaTeX preserved
     assert "# this is code, not a heading" in out          # '#' inside a code fence NOT re-levelled
+
+
+# LightOnOCR emits tables as HTML; the 'md' format should turn them into Markdown tables.
+RAW_HTML_TABLE = """\
+
+<<<PAGE 1>>>
+# Results
+
+<table>
+  <thead><tr><th>Gene</th><th>Fold change</th></tr></thead>
+  <tbody>
+    <tr><td>hglB</td><td><strong>2.1</strong></td></tr>
+    <tr><td>devR</td><td>0.4</td></tr>
+  </tbody>
+</table>
+"""
+
+
+def test_html_table_converted_to_markdown():
+    out = html_tables_to_markdown(RAW_HTML_TABLE)
+    assert "<table>" not in out and "<td>" not in out      # HTML gone
+    assert "| Gene | Fold change |" in out                  # header row
+    assert "| --- | --- |" in out                           # separator
+    assert "| hglB | **2.1** |" in out                      # <strong> -> **bold**, cell aligned
+    assert "| devR | 0.4 |" in out
+
+
+def test_restructure_converts_tables_and_levels_together():
+    out = restructure_markdown(RAW_HTML_TABLE)
+    assert out.startswith("# Results") is False             # 'Results' is canonical -> '## ', not title
+    assert "## Results" in out
+    assert "| Gene | Fold change |" in out                  # table converted in the md path
+    assert "<table>" not in out
 
 
 def test_flatten_headings_collapses_all_levels_to_two():

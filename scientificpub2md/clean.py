@@ -146,17 +146,25 @@ def _url_doi_only(s: str) -> bool:
     return len(leftover) < 12
 
 
-def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, furn_keys):
+def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, furn_keys,
+                         front_matter_window):
     """Per-line pass: drop junk, normalize headings to '## ', infer missing headers. Returns lines.
 
     HTML tables (LightOnOCR's native table format) are emitted verbatim — none of the per-line junk
     filtering, heading normalization, or header inference is applied inside a <table>...</table> span.
+
+    Front-matter-only filters (publication banners, journal mastheads, "Received/Edited by …" meta)
+    are active only while we're still in the front matter: until the first canonical content section
+    is seen, OR until ``front_matter_window`` body lines have been kept. The window backstop matters
+    for documents that have no Abstract/Introduction/Methods/… heading (e.g. reports, notes), which
+    would otherwise keep dropping body lines that merely look like front matter for the whole file.
     """
-    out, seen_section, in_table = [], False, False
+    out, seen_section, in_table, kept = [], False, False, 0
 
     def _emit_heading(text):
-        nonlocal seen_section
+        nonlocal seen_section, kept
         out.append("## " + text)
+        kept += 1
         if _CONTENT_HEAD.match(text):
             seen_section = True
 
@@ -168,11 +176,14 @@ def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, 
             s = ln.strip()
             if in_table:
                 out.append(ln)
+                if s:
+                    kept += 1
                 if _TABLE_CLOSE.search(s):
                     in_table = False
                 continue
             if _TABLE_OPEN.search(s):
                 out.append(ln)
+                kept += 1
                 in_table = not _TABLE_CLOSE.search(s)
                 continue
             if not s:
@@ -183,10 +194,12 @@ def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, 
             if _RULE.match(s) or _PAGENUM.match(s):
                 continue
 
+            in_front = not seen_section and kept < front_matter_window
+
             m = _ANY_HEADING.match(ln)
             if m:
                 htext = m.group(2).strip()
-                if drop_banners and not seen_section and (_BANNER.match(htext) or _JOURNAL_TOKEN.match(htext)):
+                if drop_banners and in_front and (_BANNER.match(htext) or _JOURNAL_TOKEN.match(htext)):
                     continue
                 _emit_heading(htext)
                 continue
@@ -196,7 +209,7 @@ def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, 
                 continue
             if len(s) < 100 and _COPYRIGHT.search(s):
                 continue
-            if not seen_section and _META_FRONT.match(s):
+            if in_front and _META_FRONT.match(s):
                 continue
 
             # infer missing headers
@@ -208,9 +221,11 @@ def _normalize_and_infer(pages, *, infer_headers, drop_furniture, drop_banners, 
                 if rm:
                     _emit_heading(rm.group("head").strip())
                     out.append(rm.group("body").strip())
+                    kept += 1
                     continue
 
             out.append(ln)
+            kept += 1
     return out
 
 
@@ -238,8 +253,14 @@ def _scrub_backmatter(lines, scrub_sections):
     return out
 
 
+# How many kept body lines to treat as "still in front matter" when no canonical content section is
+# ever seen — a backstop so non-paper documents don't filter front-matter junk through the whole body.
+_FRONT_MATTER_WINDOW = 60
+
+
 def clean_document(doc: str, *, scrub_sections=DEFAULT_SCRUB, infer_headers: bool = True,
-                   drop_furniture: bool = True, drop_banners: bool = True, min_repeat: int = 3) -> str:
+                   drop_furniture: bool = True, drop_banners: bool = True, min_repeat: int = 3,
+                   front_matter_window: int = _FRONT_MATTER_WINDOW) -> str:
     """Clean + normalize raw OCR output into parser-ready, verbatim text.
 
     scrub_sections: back-matter category names to drop. Default = everything the Qwen prompt
@@ -251,12 +272,15 @@ def clean_document(doc: str, *, scrub_sections=DEFAULT_SCRUB, infer_headers: boo
     infer_headers: promote unmarked section-vocab lines + split run-in headers to '## '.
     drop_furniture: remove running heads/footers (lines repeating on >= min_repeat pages).
     drop_banners: remove front-matter publication banners ("OPEN ACCESS", "RESEARCH ARTICLE", …).
+    front_matter_window: keep the front-matter-only filters (banners/mastheads/meta) active for at
+        most this many kept body lines when no canonical content section is found (papers exit on the
+        Abstract/Introduction/… heading and never reach this).
     """
     pages = _split_pages(doc)
     furn_keys = _furniture_keys(pages, min_repeat) if drop_furniture else set()
     lines = _normalize_and_infer(
         pages, infer_headers=infer_headers, drop_furniture=drop_furniture,
-        drop_banners=drop_banners, furn_keys=furn_keys,
+        drop_banners=drop_banners, furn_keys=furn_keys, front_matter_window=front_matter_window,
     )
     if scrub_sections:
         lines = _scrub_backmatter(lines, scrub_sections)
